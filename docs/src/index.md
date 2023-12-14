@@ -114,6 +114,8 @@ This section contains documentation for estimating the melody, as well as some b
 
 ```@docs
 findmelody
+findmelodyhertz
+getharmonic
 estimatechirpbounds
 getchirpstartandendindices
 plotmelody
@@ -125,7 +127,19 @@ plotoffsetchirps
 separatechirpkwargs
 ```
 
-# Misc
+# Optimization
+This section contains helper methods for performing blind deconvolution on a chirp sequence to estimate the initial bat vocalization.
+
+```@docs
+colwisenormalize
+getchirpsequenceY
+getinitialconditionsnr
+getinitialconditionsparsity
+getmelodyregularization
+optimizePALM
+```
+
+# Miscellaneous
 ```@docs
 randint
 distancefrommic

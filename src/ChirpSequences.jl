@@ -363,10 +363,11 @@ function groupchirpsequencesbystarttime(chirp_sequence_bounds_per_mic::Array{Mat
     #   Increment current_seq_idx for mic (in the next iteration, look at the
     #       next chirp sequence for this microphone).
 
-    current_seq_idx = ones(Int64, 4);
+    n_mics = size(y, 2);
+    current_seq_idx = ones(Int64, n_mics);
 
     # number of chirp sequences detected for each microphone
-    num_seqs = [size(chirp_sequence_bounds_per_mic[mic], 1) for mic=1:4];
+    num_seqs = [size(chirp_sequence_bounds_per_mic[mic], 1) for mic=1:n_mics];
     current_vocalization_time = 0;
     current_seqs = Dict{Int64, ChirpSequence}();
 
@@ -379,11 +380,11 @@ function groupchirpsequencesbystarttime(chirp_sequence_bounds_per_mic::Array{Mat
                 (current_seq_idx[mic] <= num_seqs[mic]) ?
                 getvocalizationtimems(chirp_sequence_bounds_per_mic[mic][current_seq_idx[mic], 1], 
                                         mic, location_data, mic_locations) : Inf
-                for mic=1:4
+                for mic=1:n_mics
             ];
 
             no_nans = true;
-            for mic=1:4
+            for mic=1:n_mics
                 # If any vocalization times couldn't be estimated, skip that
                 # chirp sequence
                 if isnan(chirp_times[mic])

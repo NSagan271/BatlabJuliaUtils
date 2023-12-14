@@ -18,9 +18,9 @@ export ChirpSequence, getboundsfromboxes, findhighsnrregions, findroughchirpsequ
 
 export FS, FS_VIDEO, SPEED_OF_SOUND, DEFAULT_PLOT_DIM, MAX_SEQUENCE_LENGTH
 
-export findmelody, estimatechirpbounds, getchirpstartandendindices, plotmelody, plotmelodydb, estimatechirp, plotestimatedchirps, computemelodyoffsets, plotoffsetchirps, separatechirpkwargs
+export findmelody, findmelodyhertz, getharmonic, estimatechirpbounds, getchirpstartandendindices, plotmelody, plotmelodydb, estimatechirp, plotestimatedchirps, computemelodyoffsets, plotoffsetchirps, separatechirpkwargs
 
-export colwisenormalize, getchirpsequenceY, getinitialcondition, getmelodyregularization
+export colwisenormalize, getchirpsequenceY, getinitialconditionsnr, getinitialconditionsparsity, getmelodyregularization, optimizePALM
 
 export randint, distancefrommic
 
