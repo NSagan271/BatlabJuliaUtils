@@ -14,7 +14,7 @@ export getnoisesampleidxs, windowedenergy, estimatesnr
 
 export getplottingsettings, plotmicdata, plotfftmag, myplot, myplot!, plotmicdata!
 
-export ChirpSequence, getboundsfromboxes, findhighsnrregions, findroughchirpsequenceidxs, adjustsequenceidxs, getvocalizationtimems, groupchirpsequencesbystarttime, plotchirpsequence
+export ChirpSequence, getboundsfromboxes, findhighsnrregions, findroughchirpsequenceidxs, adjustsequenceidxs, getvocalizationtimems, groupchirpsequencesbystarttime, plotchirpsequence, plotchirpsequenceboxes
 
 export FS, FS_VIDEO, SPEED_OF_SOUND, DEFAULT_PLOT_DIM, MAX_SEQUENCE_LENGTH
 

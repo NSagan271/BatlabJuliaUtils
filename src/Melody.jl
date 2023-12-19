@@ -84,8 +84,7 @@ function findmelody(chirp_seq_single_mic::ChirpSequence, peak_snr_thresh::Real;
             end
             band = Sx_db[band_freq_idxs, idx];
             melody[idx] = argmax(band) + band_freq_idxs[1] - 1;
-    
-            if melody[idx] < melody[idx-1]
+            if melody[idx] < maximum(melody[1:idx-1]) - 3
                 downward_trajectory = true;
             end
         end
@@ -454,15 +453,25 @@ sequence.
 
 Inputs:
 - `chirp_seq_all_mics`: mapping of microphone index to `ChirpSequence` object.
+- `same_length` (default: `true`): whether to zero-pad the ends of chirp
+    sequences so that all of them are the same length.
 - Rest of the arguments: see `estimatechirp`.
 """
-function plotestimatedchirps(chirp_seq_all_mics::Dict{Int64, ChirpSequence}, peak_snr_thresh::Real;
-    chirp_kwargs...)
+function plotestimatedchirps(chirp_seq_all_mics::Dict{Int64, ChirpSequence},    
+        peak_snr_thresh::Real; same_length=true,
+        chirp_kwargs...)
 
     num_plots = Int64(length(chirp_seq_all_mics) + length(chirp_seq_all_mics) % 2);
     plots = Matrix(undef, num_plots, 1);
 
     chirp_lens = zeros(length(chirp_seq_all_mics));
+
+    longest_seq = 0;
+    for mic=keys(chirp_seq_all_mics)
+        seq_i = chirp_seq_all_mics[mic];
+        longest_seq = max(longest_seq, seq_i.length);
+    end
+
 
     for (i, mic)=enumerate(sort(collect(keys(chirp_seq_all_mics))))
         seq_i = chirp_seq_all_mics[mic];
@@ -470,7 +479,13 @@ function plotestimatedchirps(chirp_seq_all_mics::Dict{Int64, ChirpSequence}, pea
 
         plot_idxs = seq_i.start_idx:(seq_i.start_idx + seq_i.length - 1);
 
-        plots[i] = plotmicdata(seq_i.mic_data, plot_idxs=plot_idxs, 
+        mic_data = seq_i.mic_data;
+        if same_length
+            mic_data = vcat(mic_data, zeros(longest_seq - seq_i.length));
+            plot_idxs = seq_i.start_idx:seq_i.start_idx+longest_seq-1;
+        end
+
+        plots[i] = plotmicdata(mic_data, plot_idxs=plot_idxs, 
             title=(@sprintf "Chirp Sequence and chirp for mic %d" mic); 
             label="Sequence");
 

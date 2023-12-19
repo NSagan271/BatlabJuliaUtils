@@ -225,6 +225,7 @@ function getinitialconditionsnr(Y::Matrix{Float64}, chirp_seq_all_mics::Dict{Int
     longest_chirp = 0;
     best_snr = -Inf;
     best_snr_mic = 0;
+    offsets = computemelodyoffsets(chirp_seq_all_mics, peak_snr_thresh; chirp_kwargs...);
     for mic=mics
         snr = maximum(chirp_seq_all_mics[mic].snr_data);
         if snr > best_snr
@@ -234,9 +235,14 @@ function getinitialconditionsnr(Y::Matrix{Float64}, chirp_seq_all_mics::Dict{Int
 
         start_idx, X_init = estimatechirp(chirp_seq_all_mics[mic], peak_snr_thresh; chirp_kwargs...);
         X_init_L = length(X_init);
-        longest_chirp = max(X_init_L, longest_chirp);
+        longest_chirp = max(X_init_L, longest_chirp) + offsets[mic];
     end
     _, X_init = estimatechirp(chirp_seq_all_mics[best_snr_mic], peak_snr_thresh; chirp_kwargs...);
+    if offsets[best_snr_mic] > 0
+        X_init = vcat(zeros(offsets[best_snr_mic]), X_init);
+    elseif offsets[best_snr_mic] < 0
+        X_init = X_init[1-offsets[best_snr_mic]:end];
+    end
     X_init /= maximum(abs.(X_init));
 
     X_init = vcat(X_init, zeros(size(Y, 1) - size(X_init, 1)));
@@ -289,7 +295,7 @@ Outputs:
 - `max_chirp_len`: maximum chirp length from `estimatechirp`.
 """
 function getmelodyregularization(chirp_seq_all_mics::Dict{Int64, ChirpSequence}, N::Int64,
-    peak_snr_thresh::Real; melody_radius = 2, nfft=256, stft_stride=Int64(floor(nfft/4)),
+    peak_snr_thresh::Real; melody_radius = 0, nfft=256, stft_stride=Int64(floor(nfft/4)),
     max_freq_hz=100_000, chirp_kwargs...)
 
     # Get keyword arguments for findmelody, estimatechirpbounds,
@@ -371,13 +377,15 @@ function getmelodyregularization(chirp_seq_all_mics::Dict{Int64, ChirpSequence},
 
     Mx2_downsampled = Mx2;
     while start_idx <= size(Mx2, 2);
-        Mx2_downsampled[:, window_idx] = minimum(Mx2[:, start_idx-Int64(nfft/2)+1:min(size(Mx2, 2), start_idx+Int64(nfft/2))]; dims=2);
+        Mx2_downsampled[:, window_idx] = 
+            minimum(Mx2[:, start_idx-Int64(ceil(nfft/2))+1:min(size(Mx2, 2), start_idx+Int64(ceil(nfft/2))+stft_stride)];
+                    dims=2);
         start_idx += stft_stride;
         window_idx += 1
     end
     Mx2_downsampled = Mx2_downsampled[:, 1:window_idx-1];
-    Mx2_downsampled /= (N_f * size(Mx2, 2));
-    Mx2_downsampled /= 10;
+    Mx2_downsampled /= sum(Mx2_downsampled);
+    Mx2_downsampled *= 100;
     return Mx2_downsampled, max_chirp_len;
 end
 
@@ -447,7 +455,7 @@ function optimizePALM(chirp_seq::Dict{Int64, ChirpSequence}, Y::Matrix{Float64},
         num_debug=10, nfft=256, stft_stride=Int64(floor(nfft/4)), 
         chirp_kwargs...)
 
-    mu_1, mu_2, mu_3 = data_fitting_weight, sparsity_weight, melody_weight
+    mu_1, mu_2, mu_3 = data_fitting_weight, sparsity_weight / 5000, melody_weight
 
     # print a debug statement after this many iterations
     debug_freq = ceil(max_iter / num_debug);
@@ -477,7 +485,7 @@ function optimizePALM(chirp_seq::Dict{Int64, ChirpSequence}, Y::Matrix{Float64},
     Mx2 *= mu_3;
 
     # Lipschitz constant used to calculate gradient descent step size
-    Lr = N_w * maximum(W) .^ 2 * maximum(Mx2);
+    Lr = maximum(W).^2 * sum(maximum(Mx2; dims=1));
 
     ## Function for printing debugging statements
     function debug(iter=0)
@@ -503,11 +511,11 @@ function optimizePALM(chirp_seq::Dict{Int64, ChirpSequence}, Y::Matrix{Float64},
 
         # Each element of C_diags is the gradient descent step size for the
         # corresponding row of H
-        L1_prime = mu_1 / K^2 * maximum(abs.(X_fft) .^ 2);
-        C_diags = gamma_H .* (L1_prime .+ mu_2 / (N*K) ./ sqrt.(H .^ 2 .+ alpha ^ 2));
+        L1_prime = mu_1 / K * maximum(abs.(X_fft) .^ 2);
+        C_diags = gamma_H .* (L1_prime .+ mu_2 / (K) ./ sqrt.(H .^ 2 .+ alpha ^ 2));
 
         # Gradient of the objective function with respect to H
-        grad_H_f = mu_1 / K^2 * real.(colwiseifft(conj.(X_fft) .* (sqrt(N) .* X_fft .* H_fft .- Y_fft))) + mu_2 / (N*K) .* H ./ sqrt.(H .^ 2 .+ alpha ^ 2);
+        grad_H_f = mu_1 / K * real.(colwiseifft(conj.(X_fft) .* (sqrt(N) .* X_fft .* H_fft .- Y_fft))) + mu_2 / (K) .* H ./ sqrt.(H .^ 2 .+ alpha ^ 2);
 
         # Perform a gradient descent step on H
         H = H .- grad_H_f ./ C_diags;
@@ -518,10 +526,10 @@ function optimizePALM(chirp_seq::Dict{Int64, ChirpSequence}, Y::Matrix{Float64},
         ##### Update X
 
         # Gradient descent step size for updating X
-        L2 = mu_1 / K^2 * maximum((abs.(H_fft) .^ 2) * ones(K)) + Lr;
+        L2 = mu_1 / K * maximum((abs.(H_fft) .^ 2) * ones(K)) + Lr;
 
         # Gradient of the data-fitting term with respect to X
-        grad_X_f = mu_1 / K^2 * real.(
+        grad_X_f = mu_1 / K * real.(
             DSP.ifft((sqrt(N) .* (abs.(H_fft) .^ 2) * ones(K)) .* X_fft .- (conj.(H_fft) .* Y_fft) * ones(K))
         )[1:max_chirp_len];
 

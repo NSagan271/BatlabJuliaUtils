@@ -105,6 +105,7 @@ adjustsequenceidxs
 getvocalizationtimems
 groupchirpsequencesbystarttime
 plotchirpsequence
+plotchirpsequenceboxes
 ```
 
 # "Melody"

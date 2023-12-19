@@ -447,25 +447,41 @@ Inputs:
 - `chirp_seq_all_mics`: dictionary mapping microphone number to a
     `ChirpSequence` object.
 - `plot_separate`, `plot_spectrogram`: descibed above.
+- `same_length` (default: true): zero-pad shorter chirp sequences at the end
+    so that all chirp sequences are the same length. Only relevant for
+    `plot_separate` or `plot_spectrogram`.
+- `n_cols (default: 2)`: number of plots per row.
 """
-function plotchirpsequence(chirp_seq_all_mics::Dict{Int64, ChirpSequence}; plot_separate=false, plot_spectrogram=false)
+function plotchirpsequence(chirp_seq_all_mics::Dict{Int64, ChirpSequence}; plot_separate=false, plot_spectrogram=false, same_length=true, n_cols=2)
     ## For plotting separately
     n_mics = length(chirp_seq_all_mics);
     sorted_mics = sort(collect(keys(chirp_seq_all_mics)));
 
     retval = nothing;
 
-    num_plots = Int64(n_mics + n_mics % 2);
+    num_plots = Int64(n_mics + n_mics % n_cols);
     plots = Matrix(undef, num_plots, 1);
+
+    longest_seq = 0;
+    for mic=sorted_mics
+        seq_i = chirp_seq_all_mics[mic];
+        longest_seq = max(longest_seq, seq_i.length);
+    end
 
     for (i, mic)=enumerate(sorted_mics)
         seq_i = chirp_seq_all_mics[mic];
         plot_idxs = seq_i.start_idx:seq_i.start_idx+seq_i.length-1;
 
+        mic_data = seq_i.mic_data;
+        if same_length && (plot_separate || plot_spectrogram)
+            mic_data = vcat(mic_data, zeros(longest_seq - seq_i.length));
+            plot_idxs = seq_i.start_idx:seq_i.start_idx+longest_seq-1;
+        end
+
         if plot_spectrogram
-            plots[i] = plotSTFTtime(seq_i.mic_data, nfft=256, noverlap=255, title=(@sprintf "Isolated chirp sequence for mic %d" mic));
+            plots[i] = plotSTFTtime(mic_data, nfft=256, noverlap=255, title=(@sprintf "Isolated chirp sequence for mic %d" mic));
         elseif plot_separate
-            plots[i] = plotmicdata(seq_i.mic_data,  plot_idxs=plot_idxs , title=(@sprintf "Isolated chirp sequence for mic %d" mic));
+            plots[i] = plotmicdata(mic_data,  plot_idxs=plot_idxs , title=(@sprintf "Isolated chirp sequence for mic %d" mic));
         elseif i == 1
             retval = plotmicdata(seq_i.mic_data; plot_idxs=plot_idxs, label=(@sprintf "mic %d" mic), title="Chirp Sequence");
         else
@@ -477,7 +493,88 @@ function plotchirpsequence(chirp_seq_all_mics::Dict{Int64, ChirpSequence}; plot_
         for i = n_mics+1:num_plots
             plots[i] = myplot([0, 0], legend=false, title="Blank Plot", xlabel="", ylabel="");
         end
-        return plot(plots..., layout=(Int64(num_plots / 2), 2), size=(1100, 150*num_plots))
+        return plot(plots..., layout=(Int64(num_plots / n_cols), n_cols), size=(min(n_cols*700, 1500), 300*num_plots / n_cols))
     end
     return retval;
+end
+
+"""
+    plotchirpsequenceboxes(start_ms::Real, stop_ms::Real,
+        vocalization_times::Array, chirp_sequences::Array{Dict{Int64, ChirpSequence}},
+        y::Matrix{Float64}, mics=1:size(y, 2))
+
+Plots audio data (specified by matrix `y`) from `start_ms` to `stop_ms`
+milliseconds, with boxes around all chirp sequences in that interval. Estimated
+vocalization times are written above all boxes.
+
+Inputs:
+- `start_ms`: start time of the plot, in milliseconds.
+- `stop_ms`: stop time of the plot, in milliseconds.
+- `vocalization_times`: list of vocalization times output by
+    `groupchirpsequencesbystarttime`.
+- `chirp_sequences`: list of mappings from microphone to `ChirpSequence` object
+    produced by `groupchirpsequencesbystarttime`.
+- `y`: matrix of microphone data, where each column is a different microphone.
+- `mics` (default: all): microphones for which to plot chirp sequences.
+"""
+function plotchirpsequenceboxes(start_ms::Real, stop_ms::Real, vocalization_times::Array, 
+        chirp_sequences::Array{Dict{Int64, ChirpSequence}}, y::Matrix{Float64};
+        mics=1:size(y, 2), annotation_fontsize=10, plot_width=1200)
+    start_seq_idx = findfirst(vocalization_times .>= start_ms);
+    stop_seq_idx = findlast(vocalization_times .<= stop_ms);
+    if start_ms > stop_ms || isnothing(start_seq_idx) || isnothing(stop_seq_idx)
+        println("ERROR: no chirp sequences in the timeframe specified");
+        return;
+    end
+    start_seq_idx = start_seq_idx[1]
+    for seq_idx=start_seq_idx[1]:-1:1
+        new_start_idx = false
+        seq = chirp_sequences[seq_idx]
+        for mic=mics
+            if haskey(chirp_sequences[seq_idx], mic) && 
+                seq[mic].start_idx + seq[mic].length - 1 > start_ms
+                new_start_idx = true;
+                start_seq_idx = seq_idx;
+            end
+        end
+        if !new_start_idx
+            break;
+        end
+    end            
+    stop_seq_idx = stop_seq_idx[1];
+
+    start_y_idx = Int64(floor(start_ms * 250)) + 1;
+    stop_y_idx = min(Int64(ceil(stop_ms * 250)) + 1, size(y, 1));
+
+    plots = Matrix(undef, length(mics), 1);
+    for (mic_idx, mic)=enumerate(mics)
+        box_height = maximum(y[start_y_idx:stop_y_idx, mic]);
+        under_box = minimum(y[start_y_idx:stop_y_idx, mic]);
+        plots[mic_idx] = plotmicdata(max(start_y_idx-1000, 1):stop_y_idx, y[:, mic], title=(@sprintf "Audio Data for Mic %d" mic),
+            ylims=(2*under_box, 2*box_height), label=false);
+        for i=start_seq_idx:stop_seq_idx
+            if haskey(chirp_sequences[i], mic)
+                seq = chirp_sequences[i][mic];
+                box = zeros(seq.length+2);
+                box[2:end-1] .= 1;
+                box_ms = audioindextoms.((seq.start_idx-1):(seq.start_idx+seq.length));
+                color = :red3
+                if (i % 4 == start_y_idx % 4)
+                    color = :blue3;
+                elseif (i % 4 == start_y_idx % 4 + 1)
+                    color = :purple3;
+                elseif (i % 4 == start_y_idx % 4 + 2)
+                    color = :darkgreen;
+                end
+                plot!(box_ms, box .* box_height, color=color, linewidth=2, label=false);
+                plot!(box_ms, box .* under_box, color=color, linewidth=2, label=false);
+                if box_ms[end] > start_ms && box_ms[1] < stop_ms
+                    txt_y = (i % 2 == start_y_idx % 2) ? box_height * 1.5 : under_box * 1.5;
+                    annotate!((box_ms[1] + box_ms[end]) / 2, txt_y,
+                        text((@sprintf "chirp:\n%d ms" Int64(round(vocalization_times[i]))), annotation_fontsize, color));
+                end
+            end
+        end
+    end
+    return plot(plots..., layout=(length(mics), 1), size=(plot_width, 300*length(mics)), xlims=(start_ms-5,stop_ms));
 end
