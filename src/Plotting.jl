@@ -61,7 +61,7 @@ function myplot!(args...; kwargs...)
 end
 
 """
-    plotmicdata(idxs::AbstractArray{Int64}, y::AbstractArray; plot_idxs=idxs,
+    plotmicdata(idxs::AbstractArray{Int}, y::AbstractArray; plot_idxs=idxs,
         kwargs...)
 
 Plot a time segment of audio data `y`, with milliseconds on the x-axis and
@@ -77,20 +77,20 @@ Inputs:
 - `kwargs...`: you can pass in any additional keyword arguments to set plotting
     parameters.
 """
-function plotmicdata(idxs::AbstractArray{Int64}, y::AbstractArray; plot_idxs=idxs, kwargs...)
-    return plot(audioindextoms.(plot_idxs), Float64.(y[idxs, :]); 
+function plotmicdata(idxs::AbstractArray{Int}, y::AbstractArray; plot_idxs=idxs, kwargs...)
+    return plot(audioindextoms.(plot_idxs), Real.(y[idxs, :]); 
                 getplottingsettings("Milliseconds", "Voltage", "Mic Data"; kwargs...)...);
 end
 
 """
-    plotmicdata!(idxs::AbstractArray{Int64}, y::AbstractArray; plot_idxs=idxs,
+    plotmicdata!(idxs::AbstractArray{Int}, y::AbstractArray; plot_idxs=idxs,
         kwargs...)
 
 Same as `plotmicdata(idxs, y)`, except adds to the last plot produced instead
 of making a new plot.
 """
-function plotmicdata!(idxs::AbstractArray{Int64}, y::AbstractArray; plot_idxs=idxs, kwargs...)
-    return plot!(audioindextoms.(plot_idxs), Float64.(y[idxs, :]); 
+function plotmicdata!(idxs::AbstractArray{Int}, y::AbstractArray; plot_idxs=idxs, kwargs...)
+    return plot!(audioindextoms.(plot_idxs), Real.(y[idxs, :]); 
                 getplottingsettings("Milliseconds", "Voltage", "Mic Data"; kwargs...)...);
 end
 
@@ -123,7 +123,7 @@ function plotmicdata!(y::AbstractArray; plot_idxs=1:size(y, 1), kwargs...)
 end
 
 """
-    plotfftmag(idxs::AbstractArray{Int64}, y::AbstractArray;
+    plotfftmag(idxs::AbstractArray{Int}, y::AbstractArray;
         fft_idxs=1:length(idxs), kwargs...)
 
 Plot the Fourier transform magnitude of a time segment of real-valued
@@ -137,7 +137,7 @@ Inputs:
 - `kwargs...`: you can pass in any additional keyword arguments to set plotting
     parameters.
 """
-function plotfftmag(idxs::AbstractArray{Int64}, y::AbstractArray; fft_idxs=1:length(idxs), kwargs...)
+function plotfftmag(idxs::AbstractArray{Int}, y::AbstractArray; fft_idxs=1:length(idxs), kwargs...)
     N=length(idxs);
     return plot(getfftfrequencies(N)[fft_idxs] ./ 1000, abs.(colwisefft(y[idxs, :])[fft_idxs, :]);
                 getplottingsettings("kHz", "Magnitude", "FFT Magnitude"; kwargs...)...);

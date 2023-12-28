@@ -2,8 +2,8 @@ using DataStructures;
 include("Defaults.jl");
 
 """
-    movingaverage(x::AbstractArray, half_len::Int64, stride=1)
-                                                        -> Matrix{Float64}
+    movingaverage(x::AbstractArray, half_len::Int, stride=1)
+                                                    -> Matrix{Real}
 
 Applies a symmetrical moving average filter of width `2*half_len + 1` to signal
 `x`. To make the output the same length as the input and avoid edge effects,
@@ -26,8 +26,8 @@ Inputs:
 Output:
 - `y`: result of applying a moving average filter to `x`.
 """
-function movingaveragefilter(x::AbstractArray, half_len::Int64, stride=1) :: AbstractArray{Float64}
-    x = reshape(x, (size(x, 1), :));
+function movingaveragefilter(x::AbstractArray, half_len::Int, stride=1) :: Matrix{Real}
+    x = vectortomatrix(x);
     y = zeros(length(1:size(x, 1)), size(x, 2))
     for i=1:size(x, 2)
         len=2*half_len + 1;
@@ -38,7 +38,7 @@ function movingaveragefilter(x::AbstractArray, half_len::Int64, stride=1) :: Abs
 end
 
 """
-    maxfilter(x::AbstractArray, half_len::Int64) -> AbstractArray{Float64}
+    maxfilter(x::AbstractArray, half_len::Int) -> Matrix{Real}
 
 Applies a maximum filter to the input: 
 `y[n] = maximum(x[n-half_len:n+half_len])`.
@@ -54,15 +54,18 @@ Inputs:
 Output:
 - `y`: output of the filter, as described above.
 """
-function maxfilter(x::AbstractArray, half_len::Int64) :: AbstractArray{Float64}
-    x = reshape(x, (size(x, 1), :));
+function maxfilter(x::AbstractArray, half_len::Int) :: Matrix
+    x = vectortomatrix(x);
     y = zeros(size(x));
-    h = MutableBinaryMaxHeap{Float64}();
+    if length(x) == 0
+        return x;
+    end
+    h = MutableBinaryMaxHeap{typeof(x[1])}();
 
     len = 2*half_len + 1;
 
     for k=1:size(x, 2)
-        heap_handles = zeros(Int64, len);
+        heap_handles = zeros(Int, len);
         extract_all!(h);
         for i=1:(size(x, 1)+half_len)
             if i > len
@@ -81,7 +84,7 @@ end
 
 """
     bandpassfilter(x::AbstractArray, min_Hz::Number, max_Hz::Number;
-        fs=250 kHz) -> AbstractArray{Float64}
+        fs=250 kHz) -> AbstractArray{Real}
 
 Applies an ideal bandpass filter with cutoffs `min_Hz` and `max_Hz` to input
 signal `x`.
@@ -100,7 +103,7 @@ Output:
 - `y`: `x`, with frequencies below `min_Hz` or above `max_Hz` zeroed out.
 """
 function bandpassfilter(x::AbstractArray, min_Hz::Number, max_Hz::Number;
-        fs=FS) :: AbstractArray{Float64}
+        fs=FS) :: Matrix
     x_fft = colwisefft(x);
     y = colwiseifft(bandpassfilterFFT(x_fft, min_Hz, max_Hz; fs=fs));
     @assert all(abs.(imag.(y)) .< 1e-10);
@@ -127,12 +130,12 @@ Output:
 """
 function bandpassfilterFFT(x_fft::AbstractArray, min_Hz::Number, max_Hz::Number; fs=FS) :: AbstractArray
     y_fft = copy(x_fft);
-    w0 = 2pi/length(x_fft);
+    w0 = 2pi/size(x_fft, 1);
     min_omega = min_Hz / fs * 2pi;
     max_omega = max_Hz / fs * 2pi;
 
-    min_idx = Int64(floor(min_omega / w0)) + 1;
-    max_idx = Int64(ceil(max_omega / w0));
+    min_idx = Int(floor(min_omega / w0)) + 1;
+    max_idx = Int(ceil(max_omega / w0));
 
     y_fft[1:min_idx, :] .= 0;
     y_fft[end-min_idx+2:end, :] .= 0;
@@ -166,8 +169,8 @@ function bandpassfilterspecgram(Sx::Matrix, min_Hz::Number,
     min_omega = min_Hz / fs * 2pi;
     max_omega = max_Hz / fs * 2pi;
 
-    min_idx = Int64(floor(min_omega / w0)) + 1;
-    max_idx = Int64(ceil(max_omega / w0));
+    min_idx = Int(floor(min_omega / w0)) + 1;
+    max_idx = Int(ceil(max_omega / w0));
 
     Sy[min_idx+1:max_idx, :] = Sx[min_idx+1:max_idx, :];
     return Sy

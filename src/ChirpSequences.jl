@@ -3,20 +3,75 @@ using Roots;
 using Printf;
 
 """
+    function estimatebuzzphase(snr::AbstractArray;
+        buzz_phase_chirp_separation_ms=20) -> Matrix{Int}
+
+Makes a very rudimentary estimate of chirp onsets, as heard by microphones, and
+then finds all times where chirp onsets are less than
+`buzz_phase_chirp_separation_ms` apart, for each microphone. It then prints out
+these time windows in descending order of length (these are the potential buzz
+phase times).
+
+Note that can also classify some echos as chirp sequences, so expect there to
+be false positives.
+
+Inputs:
+- `snr`: output of `estimatesnr`.
+- `buzz_phase_chirp_separation_ms` (default: 20): maximum number of
+    milliseconds expected between onsets of consecutive buzz phase chirps.
+"""
+function estimatebuzzphase(snr::AbstractArray; buzz_phase_chirp_separation_ms=20, fs=FS) :: Matrix{Int}
+    possible_buzz_phase = zeros(size(snr, 1));
+    for mic=1:4
+        bounds = findhighsnrregionidxs(snr, 1, 30, 40, 30)
+        for i=2:size(bounds, 1)
+            if audioindextoms(bounds[i, 1] - bounds[i-1, 1]) <= buzz_phase_chirp_separation_ms
+                possible_buzz_phase[bounds[i-1, 1]:bounds[i, 2]] .= 1;
+            end
+        end
+    end
+
+    for min_length_ms=50:-10:0
+        possible_buzz_phase_idxs = getboundsfromboxes(possible_buzz_phase .== 1;
+            filter_fn=(start_idx, stop_idx) -> (stop_idx - start_idx + 1) >= min_length_ms*FS/1000);
+        if length(possible_buzz_phase_idxs) > 0
+            break;
+        end
+    end
+    possible_buzz_phase_idxs = possible_buzz_phase_idxs[sortperm(possible_buzz_phase_idxs[:, 1] - possible_buzz_phase_idxs[:, 2]), :];
+
+    if length(possible_buzz_phase_idxs) == 0
+        println("Could not find any buzz phase here!");
+        return;
+    end
+
+    println("Printing possible buzz phase indices, in order of most to least probable\n(aka, longest to shortest)\n------------------------");
+    for i=1:size(possible_buzz_phase_idxs, 1)
+        onset = possible_buzz_phase_idxs[i, 1];
+        offset = possible_buzz_phase_idxs[i, 2];
+        len = audioindextoms(offset - onset + 1);
+        (@printf "From %d to %d (%d to %d millis): %d millis in length\n" onset offset round(audioindextoms(onset)) round(audioindextoms(offset)) round(len));
+    end
+    println("------------------------");
+    return possible_buzz_phase_idxs;
+end
+
+"""
     struct ChirpSequence
-        start_idx::Int64
-        length::Int64
-        vocalization_time_ms::Float64
-        snr_data::Vector{Float64}
-        mic_data::Vector{Float64}
-        mic_num::Int64
+        start_idx::Int
+        length::Int
+        vocalization_time_ms::Real
+        snr_data::Vector{Real}
+        mic_data::Vector{Real}
+        mic_num::Int
     end
 
 Datastructure to store individual chirp sequences (for a single microphone).
 
 Fields:
-- `start_idx`: start of the chirp, in numner of samples since the beginning of
-    the audio data.
+- `start_idx`: start of the chirp, in number of samples since the beginning of
+    the audio data that this chirp sequence comes from (i.e., the MAT data that
+    was initially read in).
 - `length`: length, in audio samples, of the chirp sequence.
 - `vocalization_time_ms`: time (since the beginning of the audio data) that the
     bat made the vocalization. Estimated using the centroid data.
@@ -27,17 +82,17 @@ Fields:
 - `mic_num`: which microphone (from 1 to 4) the data corresponds to.
 """
 struct ChirpSequence
-    start_idx::Int64
-    length::Int64
-    vocalization_time_ms::Float64
-    snr_data::Vector{Float64}
-    mic_data::Vector{Float64}
-    mic_num::Int64
+    start_idx::Int
+    length::Int
+    vocalization_time_ms::Real
+    snr_data::Vector{Real}
+    mic_data::Vector{Real}
+    mic_num::Int
 end
 
 """
-    getboundsfromboxes(boxes; filter_fn=(start_idx, stop_idx) -> true)
-        -> Matrix{Int64}
+    getboundsfromboxes(boxes::AbstractArray;
+        filter_fn=(start_idx, stop_idx) -> true) -> Matrix{Int}
 
 Given bitarray `boxes` (as a column vector), return a matrix where the first column
 is the start indices of the sections where `boxes==1`, and the second column is the
@@ -54,11 +109,11 @@ Inputs:
 Output:
 - `bounds`: two-column matrix, as described above.
 """
-function getboundsfromboxes(boxes; filter_fn=(start_idx, stop_idx) -> true) :: Matrix{Int64}
+function getboundsfromboxes(boxes::AbstractArray; filter_fn=(start_idx, stop_idx) -> true) :: Matrix{Int}
     # If boxes is one-dimensional, make it a matrix with a single column.
     # Otherwise, it'll be unchanged.
-    boxes = reshape(boxes, (size(boxes, 1), :));
-    bounds = Matrix{Int64}(undef, 0, 2)
+    boxes = vectortomatrix(boxes);
+    bounds = Matrix{Int}(undef, 0, 2);
     i = 1;
     while i <= length(boxes)
         start_idx = findfirst(boxes[i:end]);
@@ -78,21 +133,30 @@ function getboundsfromboxes(boxes; filter_fn=(start_idx, stop_idx) -> true) :: M
 end
 
 """
-    findhighsnrregions(snr::AbstractArray; signal_thresh::Float64,
-        peak_thresh::Float64, maxfilter_length::Int64) -> BitArray
+    findhighsnrregions(snr::AbstractArray, signal_thresh::Number,
+        min_peak_thresh::Number, maxfilter_length::Int;
+        snr_drop_thresh=20, peak_snr_thresh_radius=1500)-> BitArray
 
 Given the estimated SNR of the audio data (from the function `estimatesnr`),
 determine which regions are likely to contain chirp sequences, as follows:
 1. Apply a `maxfilter` to the `snr` array: this helps us find contiguous
     regions with high SNR.
 2. Find all sections where the maxfiltered SNR is above `signal_thresh`.
-3. Of those sections, keep the ones where, at some point, the SNr goes above
-    `peak_thresh`.
+3. Of those sections, keep the ones where, at some point, the SNR goes above
+    another, higher threshold.
+
+The threshold in step 3 above is set as follows:
+1. We look around in a range of `peak_snr_thresh_radius` around the "signal
+    region" and we find the maximum SNR present in that range.
+2. We require that the peak SNR of the "signal region" be at most
+    `snr_drop_thresh` dB lower than that maximum value.
+3. We also require that the peak SNR be no lower than `min_peak_thresh`.
 
 Inputs:
 - `snr`: estimated SNR of the audio data, produced by `estimatesnr`, either the
     full matrix or one column.
-- `signal_thresh`, `peak_thresh`: thresholds, described above.
+- `signal_thresh`, `min_peak_thresh`, `snr_drop_thresh`,
+    `peak_snr_thresh_radius`: thresholds, descsribed above.
 - `maxfilter_length`: half-length, in samples, of the maximum filter.
 
 Output:
@@ -100,11 +164,12 @@ Output:
     chirp sequences.
 """
 function findhighsnrregions(snr::AbstractArray, signal_thresh::Number,
-        peak_thresh::Number, maxfilter_length::Int64) :: BitArray
-    
+        min_peak_thresh::Number, maxfilter_length::Int;
+        snr_drop_thresh=20, peak_snr_thresh_radius=1500) :: BitArray
+
     # If snr is one-dimensional, make it a matrix with a single column.
     # Otherwise, it'll be unchanged.
-    snr = reshape(snr, (size(snr, 1), :));
+    snr = vectortomatrix(snr);
     maxfiltered_snr = maxfilter(snr, maxfilter_length);
     signal_locations = maxfiltered_snr .> signal_thresh;
 
@@ -112,8 +177,11 @@ function findhighsnrregions(snr::AbstractArray, signal_thresh::Number,
     high_snr_locations .= 0;
     for mic=1:size(snr, 2)
         # Find all regions that 
+        new_peak_thresh = (start_idx, stop_idx) -> max(min_peak_thresh, 
+            maximum(maxfiltered_snr[max(start_idx-peak_snr_thresh_radius, 1):min(stop_idx+peak_snr_thresh_radius, size(snr, 1)), mic]) -
+                    snr_drop_thresh);
         high_snr_bounds = getboundsfromboxes(signal_locations[:, mic]; 
-            filter_fn=(start_idx, stop_idx) -> maximum(maxfiltered_snr[start_idx:stop_idx, mic]) > peak_thresh);
+            filter_fn=(start_idx, stop_idx) -> maximum(maxfiltered_snr[start_idx:stop_idx, mic]) > new_peak_thresh(start_idx, stop_idx));
         for row=1:size(high_snr_bounds, 1)
             high_snr_locations[high_snr_bounds[row, 1]:high_snr_bounds[row, 2], mic] .= 1;
         end
@@ -122,9 +190,9 @@ function findhighsnrregions(snr::AbstractArray, signal_thresh::Number,
 end
 
 """
-    findroughchirpsequencebounds(snr::Matrix{Float64}, mic::Int64,
-        signal_thresh::Number, peak_thresh::Number, maxfilter_length::Int64)
-                                                            -> Matrix{Int64}
+    findroughchirpsequencebounds(snr::AbstractArray, mic::Int,
+        signal_thresh::Number, peak_thresh::Number, maxfilter_length::Int)
+                                                            -> Matrix{Int}
 
 For a single microphone/channel, converts the output of `findhighsnrregions` to
 a two-column matrix, where the first column is the start index of each
@@ -133,15 +201,20 @@ presumed chirp sequence.
 Inputs:
 - `snr`: estimated SNR of the audio data, produced by `estimatesnr` (full 
     matrix).
-- `signal_thresh`, `peak_thresh`: thresholds, described in
-    `findhighsnrregions`.
+- `signal_thresh`, `peak_thresh`, `snr_drop_thresh`,
+    `peak_snr_thresh_radius`: thresholds, described in `findhighsnrregions`.
 - `maxfilter_length`: half-length, in samples, of the maximum filter.
 
 Output: described above.
 """
-function findroughchirpsequenceidxs(snr::Matrix{Float64}, mic::Int64, signal_thresh::Number,
-        peak_thresh::Number, maxfilter_length::Int64) :: Matrix{Int64}
-    high_snr_locations = findhighsnrregions(snr[:, mic], signal_thresh, peak_thresh, maxfilter_length);
+function findhighsnrregionidxs(snr::AbstractArray, mic::Int, 
+        signal_thresh::Number, peak_thresh::Number, maxfilter_length::Int;
+        snr_drop_thresh=20, peak_snr_thresh_radius=2000) :: Matrix{Int}
+
+    snr = vectortomatrix(snr);
+    high_snr_locations = findhighsnrregions(snr[:, mic], signal_thresh, peak_thresh, 
+        maxfilter_length; snr_drop_thresh=snr_drop_thresh,
+        peak_snr_thresh_radius=peak_snr_thresh_radius);
     result = getboundsfromboxes(high_snr_locations);
 
     ## Adjust for the max-filtering done.
@@ -151,21 +224,21 @@ function findroughchirpsequenceidxs(snr::Matrix{Float64}, mic::Int64, signal_thr
 end
 
 """
-    adjustsequencebounds(snr::Matrix{Float64}, mic::Int64,
-        rough_bounds::Vector{Int64}, max_end_idx::Int64; tail_snr_thresh::Real,
-        max_seq_len=MAX_SEQUENCE_LENGTH, maxfilter_seq_end=50) -> Vector{Int64}
+    adjusthighsnridxs(snr::AbstractArray, mic::Int,
+        rough_bounds::Vector{Int}, max_end_idx::Int; tail_snr_thresh::Real,
+        max_seq_len=MAX_SEQUENCE_LENGTH, maxfilter_seq_end=50) -> Vector{Int}
     
 Given rough bounds for a single chirp sequence (one row of the output of
-`findroughchirpsequenceidxs`), adjust the end index to ensure that the chirp
+`findhighsnrregionidxs`), adjust the end index to ensure that the chirp
 sequence isn't cut off early.
 
 The process is similar to `findhighsnrregions`, but with more lenient
 thresholds.
 1. Apply a `maxfilter` to the `snr` array, with a filter size that is ideally
-    longer than the one used for `findroughchirpsequenceidxs`.
+    longer than the one used for `findhighsnrregionidxs`.
 2. Find the first index of the maxfiltered SNRs that goes below
     `tail_snr_thresh`, a threshold lower than the one used for
-    `findroughchirpsequenceidxs`, and sets the end index of the chirp
+    `findhighsnrregionidxs`, and sets the end index of the chirp
     sequence to this. If this index is beyond `max_end_idx`, then the end of
     the chirp sequence is set to `max_end_idx`.
 
@@ -173,7 +246,7 @@ Inputs:
 - `snr`: estimated SNR of the audio data, produced by `estimatesnr` (full 
     matrix).
 - `mic`: microphone number, from 1 to 4.
-- `rough_bounds`: row of the matrix produced by `findroughchirpsequenceidxs`.
+- `rough_bounds`: row of the matrix produced by `findhighsnrregionidxs`.
 - `max_end_idx`: the start of the next chirp sequence, or the end of the signal
         if this is the last chirp sequence for a particular microphone.
 - `tail_snr_thresh`: described above.
@@ -186,9 +259,10 @@ Output:
 - `refined_bounds`: two-element vector, where the first element is the start
     of the chirp sequence (unchanged), and the second element is the 
 """
-function adjustsequenceidxs(snr::Matrix{Float64}, mic::Int64, rough_bounds::Vector{Int64}, max_end_idx::Int64,
-        tail_snr_thresh::Real; max_seq_len=MAX_SEQUENCE_LENGTH, maxfilter_length=50) :: Vector{Int64}
-    refined_bounds = copy(rough_bounds);
+function adjusthighsnridxs(snr::AbstractArray, mic::Int,
+        rough_bounds::AbstractArray{Int}, max_end_idx::Int,
+        tail_snr_thresh::Real; max_seq_len=MAX_SEQUENCE_LENGTH, maxfilter_length=50) :: Vector{Int}
+    refined_bounds = copy(matrixtovector(rough_bounds));
 
     max_end_idx = min(max_end_idx, refined_bounds[1] + max_seq_len);
     
@@ -200,10 +274,10 @@ function adjustsequenceidxs(snr::Matrix{Float64}, mic::Int64, rough_bounds::Vect
 end
 
 """
-    getvocalizationtimems(chirp_start_index::Int64, mic::Int64,
-        location_data::Matrix{Float64}, mic_positions::Matrix{Float64}; 
+    getvocalizationtimems(chirp_start_index::Int, mic::Int,
+        location_data::Matrix{Real}, mic_positions::Matrix{Real}; 
         buffer_time_ms=100, fs_video=360,
-        interp_type=QuadraticInterpolation) -> Float64
+        interp_type=QuadraticInterpolation) -> Real
 
 Given the index of the audio data at which a chirp sequence starts, estimate
 the time that the bat made a vocalization, in milliseconds since the start of
@@ -234,8 +308,9 @@ Inputs:
 - `interp_type` (default: `QuadraticInterpolation`): type of interpolation
     (from the package `DataInterpolations`).
 """
-function getvocalizationtimems(chirp_start_index::Int64, mic::Int64, location_data::Matrix{Float64}, mic_positions::Matrix{Float64}; 
-        buffer_time_ms=100, fs_video=FS_VIDEO, interp_type=QuadraticInterpolation) :: Float64
+function getvocalizationtimems(chirp_start_index::Int, mic::Int, location_data::AbstractArray,
+        mic_positions::AbstractArray; buffer_time_ms=100, fs_video=FS_VIDEO,
+        interp_type=QuadraticInterpolation) :: Real
 
     chirp_reached_mic_sec = audioindextosec(chirp_start_index); # in seconds since the start of the audio data
     if chirp_reached_mic_sec >= 8 # the chirp reached the microphone after the end of
@@ -273,11 +348,12 @@ function getvocalizationtimems(chirp_start_index::Int64, mic::Int64, location_da
 end
 
 """
-    groupchirpsequencesbystarttime(chirp_sequence_bounds_per_mic::Matrix{Int64},
-        snr::Matrix{Float64}, y::Matrix{Float64},
-        location_data::Matrix{Float64}, mic_locations::Matrix{Float64},
-        single_chirp_snr_thresh=100, vocalization_start_tolerance_ms=1.5) 
-                    -> Vector{Dict{Int64, ChirpSequence}}, Vector{Float64}
+    groupchirpsequencesbystarttime(
+        chirp_sequence_bounds_per_mic::AbstractArray{Matrix{Int}},
+        snr::Matrix{Real}, y::Matrix{Real}, location_data::Matrix{Real},
+        mic_locations::Matrix{Real}, single_chirp_snr_thresh=100,
+        vocalization_start_tolerance_ms=1.5, any_mic_snr_thresh=45) 
+                        -> Vector{Dict{Int, ChirpSequence}}, Vector{Real}
 
 Given start and end indices of chirp sequences, for all microphones,
 determine which chirp sequences came from the same initial chirp. Only keep
@@ -285,8 +361,8 @@ chirp sequences arising from vocalizations heard by at least two microphones.
 
 Inputs:
 - `chirp_sequence_bounds_per_mic`: array of `[chirp sequence indices for mic 1,
-    ..., chirp sequence indices for mic 4]`."Chirp sequence indices for
-    mic i" is a two-column matrix where the first column is the start indices
+    ..., chirp sequence indices for mic 4]`. "Chirp sequence indices for
+    mic i" refers to a two-column matrix where the first column is the start indices
     of each chirp sequence and the second column is the corresponding end
     indices.
 - `snr`: estimated SNR of the audio data, produced by `estimatesnr`.
@@ -298,6 +374,9 @@ Inputs:
 - `single_mic_snr_thresh` (default: 100): if a chirp sequence only has data
     from one microphone, still store the chirp sequence if it has a SNR over
     this value.
+- `any_mic_snr_thresh` (default: 45): if none of the microphones have an SNR
+    above this threshold, then we probably picked up an echo instead of a chirp,
+    which should be disregarded.
 - `vocalization_start_tolerance_ms` (default: 1.5): if the estimated
     vocalization time for two chirp sequences (for different microphones) is
     within `vocalization_start_tolerance_ms` milliseconds, then they are
@@ -318,9 +397,12 @@ Output:
 - `vocalization_times`: vector, where each element is the estimated vocalization
     time for the corresponding chirp sequence.
 """
-function groupchirpsequencesbystarttime(chirp_sequence_bounds_per_mic::Array{Matrix{Int64}}, snr::Matrix{Float64},
-        y::Matrix{Float64}, location_data::Matrix{Float64}, mic_locations::Matrix{Float64}; single_mic_snr_thresh=100,
-        vocalization_start_tolerance_ms=1.5)
+function groupchirpsequencesbystarttime(chirp_sequence_bounds_per_mic::AbstractArray{Matrix{Int}},
+        snr::AbstractArray, y::AbstractArray, location_data::AbstractArray, mic_locations::AbstractArray;
+        single_mic_snr_thresh=100, any_mic_snr_thresh=45, vocalization_start_tolerance_ms=1.5)
+
+    snr = vectortomatrix(snr);
+    y = vectortomatrix(y);
     ### Data structures to return:
     #################################################################
     # chirp_sequences: example
@@ -328,11 +410,11 @@ function groupchirpsequencesbystarttime(chirp_sequence_bounds_per_mic::Array{Mat
     #  {2-> ChirpSequence(...), 4 -> ChirpSequence(...), 3 -> ChirpSequence(...)},
     #  ...]
     # Described in the docstring.
-    chirp_sequences = Vector{Dict{Int64, ChirpSequence}}(undef, 0);
+    chirp_sequences = Vector{Dict{Int, ChirpSequence}}(undef, 0);
 
     # vocalization_times: vector, where each element is the estimated vocalization
     # time of the corresponding chirp sequence.
-    vocalization_times = Vector{Float64}(undef, 0);
+    vocalization_times = Vector{Real}(undef, 0);
     #################################################################
 
     # Algorithm summary:
@@ -364,12 +446,12 @@ function groupchirpsequencesbystarttime(chirp_sequence_bounds_per_mic::Array{Mat
     #       next chirp sequence for this microphone).
 
     n_mics = size(y, 2);
-    current_seq_idx = ones(Int64, n_mics);
+    current_seq_idx = ones(Int, n_mics);
 
     # number of chirp sequences detected for each microphone
     num_seqs = [size(chirp_sequence_bounds_per_mic[mic], 1) for mic=1:n_mics];
     current_vocalization_time = 0;
-    current_seqs = Dict{Int64, ChirpSequence}();
+    current_seqs = Dict{Int, ChirpSequence}();
 
     while any(current_seq_idx .<= num_seqs) # while there are still chirp sequences left
         # estmate the vocalization times
@@ -404,13 +486,15 @@ function groupchirpsequencesbystarttime(chirp_sequence_bounds_per_mic::Array{Mat
 
         # The current chirp sequence comes from a different vocalization than 
         if abs(start_time - current_vocalization_time) >= vocalization_start_tolerance_ms
-            if length(current_seqs) >= 2 || ((length(current_seqs) == 1) && 
-                    maximum(first(values(current_seqs)).snr_data) >= single_mic_snr_thresh)
+            if (length(current_seqs) >= 2 && 
+                        any([maximum(seq.snr_data) > any_mic_snr_thresh for seq=values(current_seqs)])) ||
+                    ((length(current_seqs) == 1) && 
+                        maximum(first(values(current_seqs)).snr_data) >= single_mic_snr_thresh)
                 push!(vocalization_times, current_vocalization_time);
                 push!(chirp_sequences, current_seqs);
             end  
             # clear current_seqs       
-            current_seqs = Dict{Int64, ChirpSequence}();
+            current_seqs = Dict{Int, ChirpSequence}();
         end
         
         if !haskey(current_seqs, mic)
@@ -429,11 +513,10 @@ function groupchirpsequencesbystarttime(chirp_sequence_bounds_per_mic::Array{Mat
     end
     return chirp_sequences, vocalization_times;
 end
-
 """
-    function plotchirpsequence(chirp_seq::Dict{Int64, ChirpSequence},
-        location_data::Matrix{Float64}; plot_separate=false,
-        plot_spectrogram=false)
+    function plotchirpsequence(chirp_seq::Dict{Int, ChirpSequence};
+        plot_separate=false, plot_spectrogram=false, same_length=true,
+        n_cols=true)
     
 Plots a chirp sequence on one of three formats:
 1. If `plot_separate` and `plot_spectrogram` are both `false`, it plots the
@@ -452,14 +535,15 @@ Inputs:
     `plot_separate` or `plot_spectrogram`.
 - `n_cols (default: 2)`: number of plots per row.
 """
-function plotchirpsequence(chirp_seq_all_mics::Dict{Int64, ChirpSequence}; plot_separate=false, plot_spectrogram=false, same_length=true, n_cols=2)
+function plotchirpsequence(chirp_seq_all_mics::Dict{Int, ChirpSequence};
+        plot_separate=false, plot_spectrogram=false, same_length=true, n_cols=2)
     ## For plotting separately
     n_mics = length(chirp_seq_all_mics);
     sorted_mics = sort(collect(keys(chirp_seq_all_mics)));
 
     retval = nothing;
 
-    num_plots = Int64(n_mics + n_mics % n_cols);
+    num_plots = Int(floor((n_mics + n_cols - 1) / n_cols)) * n_cols;
     plots = Matrix(undef, num_plots, 1);
 
     longest_seq = 0;
@@ -493,15 +577,15 @@ function plotchirpsequence(chirp_seq_all_mics::Dict{Int64, ChirpSequence}; plot_
         for i = n_mics+1:num_plots
             plots[i] = myplot([0, 0], legend=false, title="Blank Plot", xlabel="", ylabel="");
         end
-        return plot(plots..., layout=(Int64(num_plots / n_cols), n_cols), size=(min(n_cols*700, 1500), 300*num_plots / n_cols))
+        return plot(plots..., layout=(Int(num_plots / n_cols), n_cols), size=(min(n_cols*700, 1500), 300*num_plots / n_cols))
     end
     return retval;
 end
 
 """
     plotchirpsequenceboxes(start_ms::Real, stop_ms::Real,
-        vocalization_times::Array, chirp_sequences::Array{Dict{Int64, ChirpSequence}},
-        y::Matrix{Float64}, mics=1:size(y, 2))
+        vocalization_times::Array, chirp_sequences::Array{Dict{Int, ChirpSequence}},
+        y::Matrix{Real}, mics=1:size(y, 2))
 
 Plots audio data (specified by matrix `y`) from `start_ms` to `stop_ms`
 milliseconds, with boxes around all chirp sequences in that interval. Estimated
@@ -517,9 +601,11 @@ Inputs:
 - `y`: matrix of microphone data, where each column is a different microphone.
 - `mics` (default: all): microphones for which to plot chirp sequences.
 """
-function plotchirpsequenceboxes(start_ms::Real, stop_ms::Real, vocalization_times::Array, 
-        chirp_sequences::Array{Dict{Int64, ChirpSequence}}, y::Matrix{Float64};
-        mics=1:size(y, 2), annotation_fontsize=10, plot_width=1200)
+function plotchirpsequenceboxes(start_ms::Real, stop_ms::Real, vocalization_times::AbstractArray, 
+        chirp_sequences::Array{Dict{Int, ChirpSequence}}, y::AbstractArray;
+        mics=1:size(y, 2), annotation_fontsize=8, plot_width=1500)
+
+    y = vectortomatrix(y);
     start_seq_idx = findfirst(vocalization_times .>= start_ms);
     stop_seq_idx = findlast(vocalization_times .<= stop_ms);
     if start_ms > stop_ms || isnothing(start_seq_idx) || isnothing(stop_seq_idx)
@@ -527,12 +613,12 @@ function plotchirpsequenceboxes(start_ms::Real, stop_ms::Real, vocalization_time
         return;
     end
     start_seq_idx = start_seq_idx[1]
-    for seq_idx=start_seq_idx[1]:-1:1
+    for seq_idx=start_seq_idx:-1:1
         new_start_idx = false
         seq = chirp_sequences[seq_idx]
         for mic=mics
             if haskey(chirp_sequences[seq_idx], mic) && 
-                seq[mic].start_idx + seq[mic].length - 1 > start_ms
+                audioindextoms(seq[mic].start_idx + seq[mic].length - 1) > start_ms
                 new_start_idx = true;
                 start_seq_idx = seq_idx;
             end
@@ -543,8 +629,8 @@ function plotchirpsequenceboxes(start_ms::Real, stop_ms::Real, vocalization_time
     end            
     stop_seq_idx = stop_seq_idx[1];
 
-    start_y_idx = Int64(floor(start_ms * 250)) + 1;
-    stop_y_idx = min(Int64(ceil(stop_ms * 250)) + 1, size(y, 1));
+    start_y_idx = Int(floor(start_ms * 250)) + 1;
+    stop_y_idx = min(Int(ceil(stop_ms * 250)) + 1, size(y, 1));
 
     plots = Matrix(undef, length(mics), 1);
     for (mic_idx, mic)=enumerate(mics)
@@ -559,11 +645,11 @@ function plotchirpsequenceboxes(start_ms::Real, stop_ms::Real, vocalization_time
                 box[2:end-1] .= 1;
                 box_ms = audioindextoms.((seq.start_idx-1):(seq.start_idx+seq.length));
                 color = :red3
-                if (i % 4 == start_y_idx % 4)
+                if (i % 4 == 1)
                     color = :blue3;
-                elseif (i % 4 == start_y_idx % 4 + 1)
+                elseif (i % 4 == 2)
                     color = :purple3;
-                elseif (i % 4 == start_y_idx % 4 + 2)
+                elseif (i % 4 == 3)
                     color = :darkgreen;
                 end
                 plot!(box_ms, box .* box_height, color=color, linewidth=2, label=false);
@@ -571,7 +657,7 @@ function plotchirpsequenceboxes(start_ms::Real, stop_ms::Real, vocalization_time
                 if box_ms[end] > start_ms && box_ms[1] < stop_ms
                     txt_y = (i % 2 == start_y_idx % 2) ? box_height * 1.5 : under_box * 1.5;
                     annotate!((box_ms[1] + box_ms[end]) / 2, txt_y,
-                        text((@sprintf "chirp:\n%d ms" Int64(round(vocalization_times[i]))), annotation_fontsize, color));
+                        text((@sprintf "chirp (ms):\n%d" Int(round(vocalization_times[i]))), annotation_fontsize, color));
                 end
             end
         end

@@ -1,7 +1,7 @@
 using MAT;
 
 """
-    readmicdata(mat_filename::String, n_channels=4) -> Matrix{Float64}
+    readmicdata(mat_filename::String, n_channels=4) -> Matrix{Real}
 
 Reads audio data from a MAT file into a matrix where each column represents a 
 different microphone.
@@ -21,10 +21,10 @@ Output:
      is the number of microphones. Each column corresponds to a different
     microphone.
 """
-function readmicdata(mat_filename::String, n_channels=4) :: Matrix{Float64}
+function readmicdata(mat_filename::String, n_channels=4) :: Matrix
     file = matopen(mat_filename);
      
-    y = Matrix{Float64}(undef, 0, 0);
+    y = Matrix(undef, 0, 0);
     for i=0:(n_channels-1)
         yi = read(file, "Voltage_" * string(i))'; 
         if i == 0

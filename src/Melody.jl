@@ -1,15 +1,17 @@
 """
     findmelody(chirp_seq_single_mic::ChirpSequence, peak_snr_thresh::Real;
-        nfft=256, bandpass_filter=(20_000, 100_000), maximum_melody_slope=5)
-                                                            -> Vector{Int64}
+        find_highest_snr_in_first_ms=1, nfft=256,
+        bandpass_filter=(20_000, 100_000), maximum_melody_slope=5)
+                                                            -> Vector{Int}
 
 Given a chirp sequence (for a single microphone), estimate the "melody" (i.e.,
 the fundamental harmonic) of the vocalization using the spectrogram.
 
 The melody is traced as follows:
-1. Find when the SNR goes over the threshold previously set for the peak SNR of
-    chirp sequences, and find the melody of the chirp at that point (here, the
-    SNR is hopefully high enough to accurately estimate the melody).
+1. Find the time in the first `find_highest_snr_in_first_ms` milliseconds
+    of the chirp with the highest SNR, and find the melody of the chirp at that
+    point (here, the SNR is hopefully high enough to accurately estimate the
+    melody).
 2. Work backwards until the beginning of the chirp, at each index looking for
     the strongest frequency within some small range of the last frequency
     found. This range is determined by the parameter `maximum_melody_slope`.
@@ -28,7 +30,9 @@ melody in Hertz, use the `fftindextofrequency` function or use
 
 Inputs:
 - `chirp_seq_single_mic`: input chirp sequence object (for a single microphone).
-- `peak_snr_thresh`: threshold set for the peak SNR of a chirp sequence.
+- `peak_snr_thresh`: threshold previously set for the peak SNR of a chirp
+    sequence.
+- `find_highest_snr_in_first_ms` (default: 1): described in step 1 above.
 - `nfft` (default: 256): window size for computing the spectrogram.
 - `bandpass_filter` (default: `(20_000, 100_000)`): before computing the melody,
     a band-pass filter is applied to the spectrogram. `bandpass_filter` is a
@@ -42,11 +46,15 @@ Output:
 - `melody`: described above.
 """
 function findmelody(chirp_seq_single_mic::ChirpSequence, peak_snr_thresh::Real;
+        find_highest_snr_in_first_ms=1,
         nfft=256, bandpass_filter=(20_000, 100_000), maximum_melody_slope=5,
-        melody_drop_thresh_db=20) :: Vector{Int64}
-    pad_len = Int64(round(nfft/2));
+        melody_drop_thresh_db=20) :: Vector{Int}
+    pad_len = Int(round(nfft/2));
     x = vcat(zeros(pad_len), chirp_seq_single_mic.mic_data, zeros(nfft-1-pad_len));
     snr = chirp_seq_single_mic.snr_data;
+    find_highest_snr_in_first_samples = Int(ceil(min(find_highest_snr_in_first_ms*250, size(snr, 1))));
+    peak_snr_thresh = max(peak_snr_thresh,
+            maximum(snr[1:find_highest_snr_in_first_samples]));
     # Get the spectrogram
     Sx = stft(x, nfft, nfft-1, window=hamming(nfft));
     # bandpass filter
@@ -55,7 +63,7 @@ function findmelody(chirp_seq_single_mic::ChirpSequence, peak_snr_thresh::Real;
     N = size(Sx, 2);
     Sx_height = size(Sx, 1);
 
-    melody = ones(Int64, N);
+    melody = ones(Int, N);
 
     # Find the index where the SNR goes above peak_snr_thresh:
     idx1 = findfirst(snr .>= peak_snr_thresh)[1];
@@ -64,7 +72,7 @@ function findmelody(chirp_seq_single_mic::ChirpSequence, peak_snr_thresh::Real;
     done = false;
     harmonic = 1;
     while !done
-        melody[idx1] = Int64(round(melody[idx1]/harmonic));
+        melody[idx1] = Int(round(melody[idx1]/harmonic));
         
         # trace the melody backwards to the beginning of the chirp
         for idx=idx1-1:-1:1
@@ -84,7 +92,7 @@ function findmelody(chirp_seq_single_mic::ChirpSequence, peak_snr_thresh::Real;
             end
             band = Sx_db[band_freq_idxs, idx];
             melody[idx] = argmax(band) + band_freq_idxs[1] - 1;
-            if melody[idx] < maximum(melody[1:idx-1]) - 3
+            if melody[idx] < maximum(melody[1:idx-1]) - 3 || all(melody[max(1, idx-5):idx-1] .<  maximum(melody[1:idx-1]))
                 downward_trajectory = true;
             end
         end
@@ -96,8 +104,8 @@ function findmelody(chirp_seq_single_mic::ChirpSequence, peak_snr_thresh::Real;
 
             test_harmonic = 1;
             
-            while Int64(round(melody[loudest_idx]/test_harmonic)) > bandpass_filter[1] / FS * nfft
-                if Sx_db[Int64(round(melody[loudest_idx]/test_harmonic)), loudest_idx] > 
+            while Int(round(melody[loudest_idx]/test_harmonic)) > bandpass_filter[1] / FS * nfft
+                if Sx_db[Int(round(melody[loudest_idx]/test_harmonic)), loudest_idx] > 
                             Sx_db[melody[loudest_idx], loudest_idx] - melody_drop_thresh_db
                     harmonic = test_harmonic;
                 end
@@ -113,25 +121,22 @@ function findmelody(chirp_seq_single_mic::ChirpSequence, peak_snr_thresh::Real;
     return melody;
 end
 
+
 """
     findmelodyhertz(chirp_seq_single_mic::ChirpSequence, peak_snr_thresh::Real;
-        nfft=256, bandpass_filter=(20_000, 100_000), maximum_melody_slope=5,
-        fs=250_000) -> Vector{Float64}
+        nfft=256, melody_keyword_arguments...) -> Vector{Real}
 
 Same as `findmelody`, but converts the result to Hertz.
 """
-function findmelodyhertz(chirp_seq_single_mic::ChirpSequence, peak_snr_thresh::Real;
-        nfft=256, bandpass_filter=(20_000, 100_000), maximum_melody_slope=5,
-        melody_drop_thresh_db=20, fs=FS) :: Vector{Float64}
-    return fftindextofrequency.(findmelody(chirp_seq_single_mic, peak_snr_thresh;
-        nfft=nfft, bandpass_filter=bandpass_filter, maximum_melody_slope=maximum_melody_slope),
-        melody_drop_thresh_db=melody_drop_thresh_db,
-        nfft, fs=fs);
+function findmelodyhertz(chirp_seq_single_mic::ChirpSequence, peak_snr_thresh::Real; nfft=256,
+        melody_keyword_arguments...) :: Vector{Real}
+    return fftindextofrequency.(findmelody(chirp_seq_single_mic, peak_snr_thresh; nfft=nfft,
+        melody_keyword_arguments...), nfft);
 end
 
 """
-    getharmonic(chirp_seq_single_mic::ChirpSequence, melody::Vector{Int64},
-        harmonic_num::Int64; nfft=256, band_size=2) -> Vector{Int64}
+    getharmonic(chirp_seq_single_mic::ChirpSequence, melody::AbstractArray{Int},
+        harmonic_num::Int; nfft=256, band_size=2) -> Vector{Int}
 
 Given the output of `findmelody` for `chirp_seq_single_mic`, find the harmonic
 given by `harmonic_num`. This is done by searching for the strongest
@@ -149,9 +154,10 @@ Outputs:
 - `harmonic`: array that contains the estimated harmonic, in Fourier transform
     indices.
 """
-function getharmonic(chirp_seq_single_mic::ChirpSequence, melody::Vector{Int64},
-        harmonic_num::Int64; nfft=256, band_size=3)
-    pad_len = Int64(round(nfft/2));
+function getharmonic(chirp_seq_single_mic::ChirpSequence, melody::AbstractArray{Int},
+        harmonic_num::Int; nfft=256, band_size_above=1, band_size_below=3,
+        db_improvement_needed=3)
+    pad_len = Int(round(nfft/2));
     x = vcat(zeros(pad_len), chirp_seq_single_mic.mic_data, zeros(nfft-1-pad_len));
     snr = chirp_seq_single_mic.snr_data;
     # Get the spectrogram
@@ -163,11 +169,11 @@ function getharmonic(chirp_seq_single_mic::ChirpSequence, melody::Vector{Int64},
 
     harmonic = min.(melody*harmonic_num, Sx_height);
     for (i, note)=enumerate(melody)
-        band_start = harmonic_num*note-band_size*harmonic_num;
-        freq_band = band_start:min(harmonic_num*note+band_size*harmonic_num, Sx_height);
+        band_start = harmonic_num*note-band_size_below*harmonic_num;
+        freq_band = band_start:min(harmonic_num*note+band_size_above*harmonic_num, Sx_height);
         if length(freq_band) > 0
             harmonic_val = argmax(Sx_db[freq_band, i]) + band_start-1;
-            if Sx_db[harmonic_val, i] > Sx_db[harmonic[i], i] + 1
+            if Sx_db[harmonic_val, i] > max(-30, Sx_db[min(harmonic_num*note, Sx_height), i] + db_improvement_needed)
                 harmonic[i] = harmonic_val;
             end
         else
@@ -178,9 +184,24 @@ function getharmonic(chirp_seq_single_mic::ChirpSequence, melody::Vector{Int64},
 end
 
 """
+    smoothmelody(melody::AbstractArray{Int}; filter_size=64)
+
+Smooths a melody by produced by `findmelody` by applying a moving average filter.
+
+Inputs:
+- `melody`: output of `findmelody`.
+- `filter_size` (default: 64): kernel size of the moving average filter.
+
+Output:
+- `melody`, with a moving average filter applied, with each element rounded to the nearest integer.
+"""
+function smoothmelody(melody::AbstractArray{Int}; filter_size=64)
+    return vcat(Int.(round.(movingaveragefilter(melody, filter_size)))...);
+end
+"""
         estimatechirpbounds(chirp_seq_single_mic::ChirpSequence,
-        melody::Vector{Int64}, peak_snr_thresh::Real; nfft=256,
-        bandpass_filter=(20_000, 100_000),melody_drop_thresh_db=20, melody_thresh_db_low=-20,moving_avg_size=10) -> Int64
+        melody::Vector{Int}, peak_snr_thresh::Real; nfft=256,
+        bandpass_filter=(20_000, 100_000),melody_drop_thresh_db=20, melody_thresh_db_low=-20,moving_avg_size=10) -> Int
 
 Given a chirp sequence object (from a single mic) and the melody estimated by
 `findmelody`, estimate the end index of the chirp (i.e., separate the chirp
@@ -191,28 +212,33 @@ from the echos) as follows:
     `melody_drop_thresh_db` decibels from its peak value (if this cutoff value
     is below `melody_thresh_db_low`, we instead find where the melody strength
     goes below `melody_thresh_db_low`).
-    a. If the melody strength never drops below this threshold, then just return
+    - If the melody strength never drops below this threshold, then just return
         the last index of the chirp sequence.
 3. Apply a moving average filter to the melody strength.
 4. Apply the following heuristic:
-    - The end of the chirp is the first local minimum of the melody strength
-    after the index from step 2, or the first time the melody strength dips
-    below `melody_thresh_db_low`, whichever comes first.
+    - The end of the chirp is the first local minimum of the melody strength after
+      the index from step 2, or the first time the melody strength dips below
+      `melody_thresh_db_low`, whichever comes first.
     - If neither event happens, return the last index of the chirp sequence.
 
 Inputs:
 - `chirp_seq_single_mic`: input chirp sequence object (for a single microphone).
 - `melody`: result of `findmelody`.
 - `peak_snr_thresh`: threshold set for the peak SNR of a chirp sequence.
+- `use_second_harmonic_if_melody_starts_below` (default: 35,000): if the
+    beginning of the melody, in Hertz, is below this number, then the end
+    probably goes below the range of the microphone. So, we want to check if
+    using the second harmonic leads to a longer chip and, if so, use the second
+    harmonic to estimate the chirp onset and offset.
 - `nfft` (default: 256): window size for computing the spectrogram.
 - `bandpass_filter` (default: `(20_000, 100_000)`): before computing the melody,
     a band-pass filter is applied to the spectrogram. `bandpass_filter` is a
     tuple of the (lower cutoff, upper cutoff), in Hertz.
 - `melody_drop_thresh_db`, `melody_thresh_db_low` (defaults: 20, -20):
     described in step 2 above.
-- `melody_thresh_db_start`: the start index of the chirp is computed as the
-    first index where the melody passes this threshold. It usually works best
-    when this is a bit above the `melody_thresh_db_low`.
+- `melody_drop_thresh_db_start` (default: 35): the start index of the chirp is
+    computed as the first index where the melody strength is at most this amount
+    lower than its maximum value. 
 - `moving_avg_size`: radius of the moving average filter from step 4 above.
 
 Output:
@@ -222,12 +248,13 @@ Output:
     start of the chirp sequence.
 """
 function estimatechirpbounds(chirp_seq_single_mic::ChirpSequence,
-        melody::Vector{Int64}, peak_snr_thresh::Real;
+        melody::AbstractArray{Int}, peak_snr_thresh::Real;
+        use_second_harmonic_if_melody_starts_below=35_000,
         nfft=256, bandpass_filter=(20_000, 100_000),
-        melody_drop_thresh_db=20, melody_thresh_db_low=-20, 
-        melody_thresh_db_start=-10, moving_avg_size=10)
+        melody_drop_thresh_db=20, melody_thresh_db_low=-20,
+        melody_drop_thresh_db_start=35, moving_avg_size=10)
 
-    pad_len = Int64(round(nfft/2));
+    pad_len = Int(round(nfft/2));
     x = vcat(zeros(pad_len), chirp_seq_single_mic.mic_data, zeros(nfft-1-pad_len));
     # Get the spectrogram
     Sx = stft(x, nfft, nfft-1, window=hamming(nfft));
@@ -236,17 +263,19 @@ function estimatechirpbounds(chirp_seq_single_mic::ChirpSequence,
     Sx_db = pow2db.(abs.(Sx) .^ 2); # in decibels
 
     melody_thresh_db = max(melody_thresh_db_low, maximum(Sx_db) - melody_drop_thresh_db);
+    melody_thresh_db_start = max(melody_thresh_db_low, maximum(Sx_db) - melody_drop_thresh_db_start);
 
     N = length(melody);
 
     melody_db = [Sx_db[melody[i], i] for i=1:N];
     chirp_start = findfirst(melody_db .>= min(melody_thresh_db_start, melody_thresh_db));
+    chirp_start = isnothing(chirp_start) ? 1 : chirp_start;
 
     # The end of the chirp must occur after the snr reaches the peak threshold
     idx1 = argmax(melody_db);
     cutoff = findfirst(melody_db[idx1:end] .< melody_thresh_db);
     if isnothing(cutoff)
-        return N;
+        return chirp_start, N;
     end
     cutoff = cutoff[1] + idx1 - 1;
 
@@ -263,13 +292,20 @@ function estimatechirpbounds(chirp_seq_single_mic::ChirpSequence,
     first_below_thresh = findfirst(melody_db[cutoff:end-1] .<= melody_thresh_db_low);
     first_below_thresh = isnothing(first_below_thresh) ? N-cutoff : first_below_thresh[1];
 
-    return chirp_start, min(first_local_min, first_below_thresh)  + cutoff - 1;
+    chirp_end = min(first_local_min, first_below_thresh)  + cutoff - 1;
+    if fftindextofrequency(melody[1], nfft) < use_second_harmonic_if_melody_starts_below
+        chirp_start_harmonic, chirp_end_harmonic = getharmonic(chirp_seq_single_mic, melody, 2);
+        if chirp_end_harmonic - chirp_start_harmonic > chirp_end - chirp_start
+            return chirp_start_harmonic, chirp_end_harmonic;
+        end
+    end
+    return chirp_start, chirp_end;
 end
 
 """
     getchirpstartandendindices(
-        chirp_sequence_all_mics::Dict{Int64, ChirpSequence}, peak_snr_thresh::Real;
-        chirp_kwargs...) -> Dict{Int64, Int64}, Dict{Int64, Int64}
+        chirp_sequence_all_mics::Dict{Int, ChirpSequence}, peak_snr_thresh::Real;
+        chirp_kwargs...) -> Dict{Int, Int}, Dict{Int, Int}
 
 Given a dictionary mapping microphones to `ChirpSequence` objects, run
 `findmelody` and `estimatechirpbounds` for each `ChirpSequence` and return two
@@ -290,10 +326,11 @@ Outputs:
 - `chirp_ends`: dictionary mapping microphone indices to their respective
     chirp end indices (in samples since the start of the chirp sequence).
 """
-function getchirpstartandendindices(chirp_sequence_all_mics::Dict{Int64, ChirpSequence}, peak_snr_thresh::Real; chirp_kwargs...)
+function getchirpstartandendindices(chirp_sequence_all_mics::Dict{Int, ChirpSequence},
+        peak_snr_thresh::Real; chirp_kwargs...)
     melody_kwargs, chirp_bound_kwargs, _ = separatechirpkwargs(;chirp_kwargs...);
-    chirp_ends = Dict{Int64, Int64}();
-    chirp_starts = Dict{Int64, Int64}();
+    chirp_ends = Dict{Int, Int}();
+    chirp_starts = Dict{Int, Int}();
 
     for mic_idx = keys(chirp_sequence_all_mics)
         melody = findmelody(chirp_sequence_all_mics[mic_idx], peak_snr_thresh;  melody_kwargs...);
@@ -304,7 +341,7 @@ function getchirpstartandendindices(chirp_sequence_all_mics::Dict{Int64, ChirpSe
 end
 
 """
-    plotmelody(chirp_seq_single_mic::ChirpSequence, melody::Vector{Int64},
+    plotmelody(chirp_seq_single_mic::ChirpSequence, melody::Vector{Int},
         chirp_end=nothing; nfft=256, bandpass_filter=(20_000, 100_000),
         melody_color="blue", end_color="cyan")
 
@@ -325,9 +362,9 @@ Inputs:
 - end_color (default: "cyan"): color used to plot the vertical line at the end
     of the chirp sequence.
 """
-function plotmelody(chirp_seq_single_mic::ChirpSequence, melody::Vector{Int64}, chirp_bounds=nothing;
+function plotmelody(chirp_seq_single_mic::ChirpSequence, melody::AbstractArray{Int}, chirp_bounds=nothing;
         nfft=256, bandpass_filter=(20_000, 100_000), melody_color="blue", end_color=1)
-    pad_len = Int64(round(nfft/2));
+    pad_len = Int(round(nfft/2));
     x = vcat(zeros(pad_len), chirp_seq_single_mic.mic_data, zeros(nfft-1-pad_len));
     Sx = stft(x, nfft, nfft-1, window=hamming(nfft));
     Sx = bandpassfilterspecgram(Sx, bandpass_filter[1], bandpass_filter[2], nfft=nfft);
@@ -346,7 +383,7 @@ function plotmelody(chirp_seq_single_mic::ChirpSequence, melody::Vector{Int64}, 
 end
 
 """
-    plotmelodydb(chirp_seq_single_mic::ChirpSequence, melody::Vector{Int64};
+    plotmelodydb(chirp_seq_single_mic::ChirpSequence, melody::Vector{Int};
         nfft=256, bandpass_filter=(20_000, 100_000))
 
 Plots the strength of the melody estimated by `findmelody`, in decibels.
@@ -359,9 +396,9 @@ Inputs:
     a band-pass filter is applied to the spectrogram. `bandpass_filter` is a
     tuple of the (lower cutoff, upper cutoff), in Hertz.
 """
-function plotmelodydb(chirp_seq_single_mic::ChirpSequence, melody::Vector{Int64};
+function plotmelodydb(chirp_seq_single_mic::ChirpSequence, melody::AbstractArray{Int};
         nfft=256, bandpass_filter=(20_000, 100_000))
-    pad_len = Int64(round(nfft/2));
+    pad_len = Int(round(nfft/2));
     x = vcat(zeros(pad_len), chirp_seq_single_mic.mic_data, zeros(nfft-1-pad_len));
     Sx = stft(x, nfft, nfft-1, window=hamming(nfft));
     Sx = bandpassfilterspecgram(Sx, bandpass_filter[1], bandpass_filter[2], nfft=nfft);
@@ -386,8 +423,11 @@ function separatechirpkwargs(;chirp_kwargs...)
     chirp_bound_kwargs = Dict{Symbol, Any}();
 
     common_keys = [:nfft, :bandpass_filter];
-    melody_keys = [common_keys..., :maximum_melody_slope, :melody_drop_thresh_db];
-    chirp_bound_keys =[common_keys..., :melody_drop_thresh_db, :melody_thresh_db_low, :moving_avg_size];
+    melody_keys = [common_keys..., :maximum_melody_slope, :melody_drop_thresh_db,
+                   :find_highest_snr_in_first_ms];
+    chirp_bound_keys =[common_keys..., :melody_drop_thresh_db, :melody_thresh_db_low,   
+                    :moving_avg_size, :melody_drop_thresh_db_start,
+                    :use_second_harmonic_if_melody_starts_below];
     offset_keys = [:max_offset, :tolerance];
 
     for key=melody_keys
@@ -412,7 +452,7 @@ end
 
 """
     estimatechirp(chirp_seq_single_mic::ChirpSequence, peak_snr_thresh::Real;
-    chirp_kwargs...) -> Int64, Vector{Float64}
+    chirp_kwargs...) -> Int, Vector{Real}
 
 Use `estimatechirpend` to separate the chirp from the echos (for a single
 `ChirpSequence` object) by returning the chirp sequence up until the estimated
@@ -442,7 +482,7 @@ function estimatechirp(chirp_seq_single_mic::ChirpSequence, peak_snr_thresh::Rea
 end
 
 """
-    plotestimatedchirps(chirp_seq_all_mics::Dict{Int64, ChirpSequence},
+    plotestimatedchirps(chirp_seq_all_mics::Dict{Int, ChirpSequence},
         peak_snr_thresh::Real; nfft=256, bandpass_filter=(20_000, 100_000),
         maximum_melody_slope=5, melody_drop_thresh_db=20,
         melody_thresh_db_low=-20, moving_avg_size=10)
@@ -457,11 +497,11 @@ Inputs:
     sequences so that all of them are the same length.
 - Rest of the arguments: see `estimatechirp`.
 """
-function plotestimatedchirps(chirp_seq_all_mics::Dict{Int64, ChirpSequence},    
+function plotestimatedchirps(chirp_seq_all_mics::Dict{Int, ChirpSequence},    
         peak_snr_thresh::Real; same_length=true,
         chirp_kwargs...)
 
-    num_plots = Int64(length(chirp_seq_all_mics) + length(chirp_seq_all_mics) % 2);
+    num_plots = Int(length(chirp_seq_all_mics) + length(chirp_seq_all_mics) % 2);
     plots = Matrix(undef, num_plots, 1);
 
     chirp_lens = zeros(length(chirp_seq_all_mics));
@@ -499,11 +539,11 @@ function plotestimatedchirps(chirp_seq_all_mics::Dict{Int64, ChirpSequence},
         plots[i] = myplot([0, 0], legend=false, title="Blank Plot", xlabel="", ylabel="");
     end
     println("Chirp Lengths (ms): ", chirp_lens)
-    return plot(plots..., layout=(Int64(num_plots / 2), 2), size=(1100, 150*num_plots))
+    return plot(plots..., layout=(Int(num_plots / 2), 2), size=(1100, 150*num_plots))
 end
 
 """
-    computemelodyoffsets(chirp_sequence_all_mics::Dict{Int64, ChirpSequence},
+    computemelodyoffsets(chirp_sequence_all_mics::Dict{Int, ChirpSequence},
         peak_snr_thresh::Real; max_offset=500, max_negative_offset=100,
         tolerance=1, chirp_kwargs...)
 
@@ -539,17 +579,19 @@ Inputs:
 
 Output:
 - `offsets`: dictionary mapping microphone number to the best shift, in samples
-    of audio data, found in part 3.
+    of audio data, to the number of samples cut off from the beginning of that
+    microphone's chirp sequence. If the number of samples is negative, this
+    corresponds to extra noise at the beginning of the chirp sequence.
 """
-function computemelodyoffsets(chirp_sequence_all_mics::Dict{Int64, ChirpSequence},
+function computemelodyoffsets(chirp_sequence_all_mics::Dict{Int, ChirpSequence},
     peak_thresh::Real; max_offset=500, max_negative_offset=100, tolerance=2, chirp_kwargs...)
 
     melody_kwargs, chirp_bound_kwargs, _ = separatechirpkwargs(;chirp_kwargs...);
 
     ## test refining the chirp sequences where the beginnings are cut off
-    melodies = Dict{Int64, Vector{Int64}}();
-    chirp_ends = Dict{Int64, Int64}();
-    offsets = Dict{Int64, Int64}();
+    melodies = Dict{Int, Vector{Int}}();
+    chirp_ends = Dict{Int, Int}();
+    offsets = Dict{Int, Int}();
 
     highest_snr = -Inf;
     reference_mic = 0;
@@ -590,13 +632,12 @@ function computemelodyoffsets(chirp_sequence_all_mics::Dict{Int64, ChirpSequence
         end
     end
 
-    
     return offsets;
 end
 
 """
-function plotoffsetchirps(chirp_seq_all_mics::Dict{Int64, ChirpSequence}, 
-    offsets::Dict{Int64, Int64})
+function plotoffsetchirps(chirp_seq_all_mics::Dict{Int, ChirpSequence}, 
+    offsets::Dict{Int, Int})
 
 Plot a chirp sequence, where the data from each microphone is shifted by the
 value found in `computemelodyoffsets`. Plots spectrograms in a vertical layout
@@ -609,12 +650,12 @@ Inputs:
     chirp start indices (in samples since the start of the chirp sequence).
     You can get this using `getchirpstartandendindices`.
 """
-function plotoffsetchirps(chirp_seq_all_mics::Dict{Int64, ChirpSequence}, offsets::Dict{Int64, Int64}, 
-        start_idxs::Dict{Int64, Int64})
+function plotoffsetchirps(chirp_seq_all_mics::Dict{Int, ChirpSequence}, offsets::Dict{Int, Int}, 
+        start_idxs::Dict{Int, Int})
     n_mics = length(chirp_seq_all_mics);
     sorted_mics = sort(collect(keys(chirp_seq_all_mics)));
 
-    num_plots = Int64(n_mics);
+    num_plots = Int(n_mics);
     plots = Matrix(undef, num_plots, 1);
 
     longest_seq = 0;

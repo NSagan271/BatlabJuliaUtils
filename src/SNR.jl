@@ -3,7 +3,7 @@ using DSP;
 
 """
     getnoisesampleidxs(mic_data::AbstractArray; window_size=200)
-                                                    -> UnitRange{Int64}
+                                                    -> UnitRange{Int}
 
 Given audio data, find the longest segment that is just noise.
 
@@ -21,10 +21,10 @@ Outputs:
 - `UnitRange` (i.e., the datatype of the object `1:10`) of the indices of the
     longest segment of the data that is only noise.
 """
-function getnoisesampleidxs(mic_data::AbstractArray; window_size=200) :: UnitRange{Int64}
+function getnoisesampleidxs(mic_data::AbstractArray; window_size=200) :: UnitRange{Int}
     # If mic_data is one-dimensional, make it a matrix with a single column.
     # Otherwise, it'll be unchanged.
-    mic_data = reshape(mic_data, (size(mic_data, 1), :));
+    mic_data = vectortomatrix(mic_data);
 
     # do one pass to find the noise level
     min_amplitude = Inf;
@@ -59,8 +59,8 @@ function getnoisesampleidxs(mic_data::AbstractArray; window_size=200) :: UnitRan
 end
 
 """
-    windowedenergy(x::AbstractArray, window_size::Int64; window=hamming(nfft))
-                                                            -> Matrix{Float64}
+    windowedenergy(x::AbstractArray, window_size::Int; window=hamming(nfft))
+                                                            -> Matrix{Real}
 
 Finds the energy over sliding windows of the signal `x`, where the windows have
 stride 1 (i.e., if the first window starts at index 1, the second window starts
@@ -75,14 +75,14 @@ Inputs:
     of long windows, you can use windows like `hamming(window_size)` from the
     `DSP` package.
 """
-function windowedenergy(x::AbstractArray, window_size::Int64; window=ones(window_size)) :: Matrix{Float64}
+function windowedenergy(x::AbstractArray, window_size::Int; window=ones(window_size)) :: Matrix
     BLOCK_SIZE=500_000;
     
-    pad_len = Int64(round(window_size / 2));
+    pad_len = Int(round(window_size / 2));
 
     # If x is one-dimensional, make it a matrix with a single column.
     # Otherwise, it'll be unchanged.
-    x = reshape(x, (size(x, 1), :));
+    x = vectortomatrix(x);
     retval = zeros(size(x));
     x = vcat(zeros(pad_len, size(x, 2)), x, zeros(window_size-1-pad_len, size(x, 2)));
 
@@ -100,7 +100,7 @@ end
 
 """
     estimatesnr(y::AbstractArray, noise_sample::AbstractArray, window_size=256,
-        window=ones(window_size)) -> Matrix{Float64}
+        window=ones(window_size)) -> Matrix{Real}
 
 Crude estimate of the signal-to-noise ratio of the input signal `y`. The signal
 and noise levels are computed by taking the energy over sliding windows (with
@@ -121,12 +121,12 @@ Output:
 - `snr_est`: estimated SNR, in decibels (log scale, times 20) of every
     timepoint in `y`.
 """
-function estimatesnr(y::AbstractArray, noise_sample::AbstractArray; window_size=64, window=ones(window_size)) :: Matrix{Float64}
+function estimatesnr(y::AbstractArray, noise_sample::AbstractArray; window_size=64, window=ones(window_size)) :: Matrix
     WINDOW_LEN=500_000;
 
     # If y is one-dimensional, make it a matrix with a single column.
     # Otherwise, it'll be unchanged.
-    y = reshape(y, (size(y, 1), :));
+    y = vectortomatrix(y);
     noise_level = mean(windowedenergy(noise_sample, window_size, window=window); dims=1);
 
     snr_est = windowedenergy(y, window_size, window=window) ./ noise_level;

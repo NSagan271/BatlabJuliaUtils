@@ -13,14 +13,15 @@ Inputs:
 Outputs:
 - `Y`, with each column divided by its amplitude.
 """ 
-function colwisenormalize(Y::Matrix)
+function colwisenormalize(Y::AbstractArray)
+    Y = vectortomatrix(Y);
     return Y ./ maximum(abs.(Y); dims=1);
 end
 
 """
-    getchirpsequenceY(chirp_seq_all_mics::Dict{Int64, ChirpSequence},
-        offsets::Dict{Int64, Int64}, pad_len::Int64; normalize=true)
-                                        -> Matrix{Float64}, Vector{Int64}
+    getchirpsequenceY(chirp_seq_all_mics::Dict{Int, ChirpSequence},
+        offsets::Dict{Int, Int}, pad_len::Int; normalize=true)
+                                        -> Matrix{Real}, Vector{Int}
 
 Given chirp sequence objects (for all microphones) corresponding to the same
 initial vocalization, produce a matrix of microphone data, where each column is
@@ -47,7 +48,8 @@ Outputs:
 - `mics`: list of microphone number, where the microphone number at each index
     is the microphone used for the corresponding column of `Y`.
 """
-function getchirpsequenceY(chirp_seq_all_mics::Dict{Int64, ChirpSequence}, offsets::Dict{Int64, Int64}, pad_len::Int64; normalize=true)
+function getchirpsequenceY(chirp_seq_all_mics::Dict{Int, ChirpSequence},
+        offsets::Dict{Int, Int}, pad_len::Int; normalize=true)
     max_length = 1;
 
     for mic=keys(chirp_seq_all_mics)
@@ -56,7 +58,9 @@ function getchirpsequenceY(chirp_seq_all_mics::Dict{Int64, ChirpSequence}, offse
 
     Y = zeros(max_length + 2*pad_len, length(chirp_seq_all_mics))
     mics = sort(collect(keys(chirp_seq_all_mics)));
+
     for (i, mic)=enumerate(mics)
+
         if offsets[mic] >= 0
             Y[pad_len+1+offsets[mic]:chirp_seq_all_mics[mic].length+pad_len+offsets[mic], i] = chirp_seq_all_mics[mic].mic_data;
         else
@@ -67,14 +71,14 @@ function getchirpsequenceY(chirp_seq_all_mics::Dict{Int64, ChirpSequence}, offse
     if normalize
         Y = colwisenormalize(Y);
     end
-    
+
     return Y, mics;
 end
 
 """
-    getchirpsequenceY(chirp_seq_all_mics::Dict{Int64, ChirpSequence},
-        peak_snr_thresh::Real, pad_len::Int64; normalize=true,
-        offset_kwargs...) -> Matrix{Float64}, Vector{Int64}
+    getchirpsequenceY(chirp_seq_all_mics::Dict{Int, ChirpSequence},
+        peak_snr_thresh::Real, pad_len::Int; normalize=true,
+        offset_kwargs...) -> Matrix{Real}, Vector{Int}
 
 Like the above function (`getchirpsequenceY(chirp_seq_all_mics, offsets,
 pad_len, normalize)`), except the `offsets` are automatically computed using
@@ -97,14 +101,15 @@ Outputs:
 - `mics`: list of microphone number, where the microphone number at each index
     is the microphone used for the corresponding column of `Y`.
 """
-function getchirpsequenceY(chirp_seq_all_mics::Dict{Int64, ChirpSequence}, peak_snr_thresh::Real, pad_len::Int64; normalize=true, offset_kwargs...)
+function getchirpsequenceY(chirp_seq_all_mics::Dict{Int, ChirpSequence}, peak_snr_thresh::Real,
+        pad_len::Int; normalize=true, offset_kwargs...)
     offsets = computemelodyoffsets(chirp_seq_all_mics, peak_snr_thresh; offset_kwargs...);
     return getchirpsequenceY(chirp_seq_all_mics, offsets, pad_len, normalize=true);
 end
 
 """
-    getchirpsequenceY(chirp_seq_all_mics::Dict{Int64, ChirpSequence},
-        pad_len::Int64; normalize=true) -> Matrix{Float64}, Vector{Int64}
+    getchirpsequenceY(chirp_seq_all_mics::Dict{Int, ChirpSequence},
+        pad_len::Int; normalize=true) -> Matrix{Real}, Vector{Int}
 
 Like the above function (`getchirpsequenceY(chirp_seq_all_mics, offsets,
 pad_len, normalize)`), except the `offsets` are all set to zero.
@@ -123,8 +128,9 @@ Outputs:
 - `mics`: list of microphone number, where the microphone number at each index
     is the microphone used for the corresponding column of `Y`.
 """
-function getchirpsequenceY(chirp_sechirp_seq_all_micsquence::Dict{Int64, ChirpSequence}, pad_len::Int64; normalize=true)
-    offsets = Dict{Int64, Int64}();
+function getchirpsequenceY(chirp_sechirp_seq_all_micsquence::Dict{Int, ChirpSequence},
+        pad_len::Int; normalize=true)
+    offsets = Dict{Int, Int}();
      for mic=keys(chirp_seq_all_mics)
         offsets[mic] = 0;
     end
@@ -132,10 +138,10 @@ function getchirpsequenceY(chirp_sechirp_seq_all_micsquence::Dict{Int64, ChirpSe
 end
 
 """
-    getinitialconditionsparsity(Y::Matrix{Float64},
-        chirp_seq_all_mics::Dict{Int64, ChirpSequence}, mics::Vector{Int64},
-        peak_snr_thresh::Real; chirp_kwargs...) 
-                                    -> Vector{Float64}, Matrix{Float64}, Int64
+    getinitialconditionsparsity(Y::Matrix{Real},
+        chirp_seq_all_mics::Dict{Int, ChirpSequence}, mics::Vector{Int},
+        peak_snr_thresh::Real; h_fft_thresh=0.1, nfft=256, chirp_kwargs...) 
+                                    -> Vector{Real}, Matrix{Real}, Int
 
 Produces an initial condition for the blind deconvolution algorithm (i.e.: an
 estimate of the bat chirp and the impulse responses mapping the bat chirp to
@@ -153,50 +159,56 @@ Inputs:
 - `chirp_seq_all_mics`: mapping of microphone index to `ChirpSequence` object.
 - `mics`: list of microphones used, produced by `getchirpsequenceY`.
 - `peak_snr_thresh`: threshold set for the peak SNR of a chirp sequence.
+- `h_fft_thresh` (default: 0.1): the Fourier transform of `H_init` is set to
+    zero at indices where the FFT of `X_init` is below this threshold.
+- `nfft`: window size of the STFT used to get the melody.
 - `chirp_kwargs`: you can pass in any keywords for `estimatechirp`.
 
 Outputs: 
-- `X_init`: estimated bat vocalization.
+- `X_init`: estimated bat vocalization. `nfft/2`
 - `H_init`: matrix of estimated impulse responses, the k-th column of `H_init`,
     convolved with `X_init`, produces the k-th column of `Y`.
 - `longest_chirp`: length of the longest estimated chirp.
 """
-function getinitialconditionsparsity(Y::Matrix{Float64}, chirp_seq_all_mics::Dict{Int64, ChirpSequence}, 
-        mics::Vector{Int64}, peak_snr_thresh::Real; chirp_kwargs...)
+function getinitialconditionsparsity(Y::AbstractArray, chirp_seq_all_mics::Dict{Int, ChirpSequence}, 
+        mics::AbstractArray{Int}, peak_snr_thresh::Real; 
+        h_fft_thresh=0.1, nfft=256, chirp_kwargs...)
+
+    Y = vectortomatrix(Y);
     best_X_init = nothing;
     best_cost = Inf;
     longest_chirp = 0;
 
     for (i,mic)=enumerate(mics)
-        start_idx, X_init = estimatechirp(chirp_seq_all_mics[mic], peak_snr_thresh; chirp_kwargs...);
+        start_idx, X_init = estimatechirp(chirp_seq_all_mics[mic], peak_snr_thresh; nfft=nfft, chirp_kwargs...);
         X_init_L = length(X_init);
         # normalize
         X_init /= maximum(abs.(X_init));
         
         Y_col = Y[:, i];
         X_init = vcat(X_init, zeros(size(Y, 1) - length(X_init)));
-        
 
-        H_approx = deconvolve(Y, X_init);
+        H_approx = deconvolve(Y, X_init; fft_thresh=h_fft_thresh);
 
         cost = norm(H_approx, 1);
         
         longest_chirp = max(X_init_L, longest_chirp);
         if cost < best_cost
-            best_X_init = X_init;
+            best_X_init = X_init[1:X_init_L];
             best_cost = cost;
         end
     end
-    X_init = vcat(best_X_init, zeros(size(Y, 1) - size(best_X_init, 1)));
-    H_init = deconvolve(Y, X_init);
+    X_init = vcat(zeros(Int(round(nfft/2))), best_X_init);
+    X_init = vcat(X_init, zeros(size(Y, 1) - size(X_init, 1)));
+    H_init = deconvolve(Y, X_init; fft_thresh=h_fft_thresh);
     return X_init, H_init, longest_chirp;
 end
 
 """
-    getinitialconditionsparsity(Y::Matrix{Float64},
-        chirp_seq_all_mics::Dict{Int64, ChirpSequence}, mics::Vector{Int64},
-        peak_snr_thresh::Real; chirp_kwargs...) 
-                                    -> Vector{Float64}, Matrix{Float64}, Int64
+    getinitialconditionsnr(Y::AbstractArray,
+        chirp_seq_all_mics::Dict{Int, ChirpSequence}, mics::Vector{Int},
+        peak_snr_thresh::Real; h_fft_thresh=0.1, nfft=256, chirp_kwargs...) 
+                                    -> Vector{Real}, Matrix{Real}, Int
 
 Produces an initial condition for the blind deconvolution algorithm (i.e.: an
 estimate of the bat chirp and the impulse responses mapping the bat chirp to
@@ -212,6 +224,9 @@ Inputs:
 - `chirp_seq_all_mics`: mapping of microphone index to `ChirpSequence` object.
 - `mics`: list of microphones used, produced by `getchirpsequenceY`.
 - `peak_snr_thresh`: threshold set for the peak SNR of a chirp sequence.
+- `h_fft_thresh` (default: 0.1): the Fourier transform of `H_init` is set to
+    zero at indices where the FFT of `X_init` is below this threshold.
+- `nfft`: window size of the STFT used to get the melody.
 - `chirp_kwargs`: you can pass in any keywords for `estimatechirp`.
 
 Outputs: 
@@ -220,12 +235,15 @@ Outputs:
     convolved with `X_init`, produces the k-th column of `Y`.
 - `longest_chirp`: length of the longest estimated chirp.
 """
-function getinitialconditionsnr(Y::Matrix{Float64}, chirp_seq_all_mics::Dict{Int64, ChirpSequence}, 
-        mics::Vector{Int64}, peak_snr_thresh::Real; chirp_kwargs...)
+function getinitialconditionsnr(Y::AbstractArray, chirp_seq_all_mics::Dict{Int, ChirpSequence}, 
+        mics::AbstractArray{Int}, peak_snr_thresh::Real; h_fft_thresh=0.1, nfft=256, chirp_kwargs...)
+    
+    Y = vectortomatrix(Y);
+
     longest_chirp = 0;
     best_snr = -Inf;
     best_snr_mic = 0;
-    offsets = computemelodyoffsets(chirp_seq_all_mics, peak_snr_thresh; chirp_kwargs...);
+    offsets = computemelodyoffsets(chirp_seq_all_mics, peak_snr_thresh; nfft=nfft, chirp_kwargs...);
     for mic=mics
         snr = maximum(chirp_seq_all_mics[mic].snr_data);
         if snr > best_snr
@@ -234,6 +252,7 @@ function getinitialconditionsnr(Y::Matrix{Float64}, chirp_seq_all_mics::Dict{Int
         end
 
         start_idx, X_init = estimatechirp(chirp_seq_all_mics[mic], peak_snr_thresh; chirp_kwargs...);
+        X_init = vcat(zeros(Int(ceil(nfft/2))), X_init);
         X_init_L = length(X_init);
         longest_chirp = max(X_init_L, longest_chirp) + offsets[mic];
     end
@@ -243,17 +262,18 @@ function getinitialconditionsnr(Y::Matrix{Float64}, chirp_seq_all_mics::Dict{Int
     elseif offsets[best_snr_mic] < 0
         X_init = X_init[1-offsets[best_snr_mic]:end];
     end
+    X_init = vcat(zeros(Int(ceil(nfft/2))), X_init);
     X_init /= maximum(abs.(X_init));
 
     X_init = vcat(X_init, zeros(size(Y, 1) - size(X_init, 1)));
-    H_init = deconvolve(Y, X_init);
+    H_init = deconvolve(Y, X_init, fft_thresh=h_fft_thresh);
     return X_init, H_init, longest_chirp;
 end
 
 """
-function getmelodyregularization(chirp_seq_all_mics::Dict{Int64, ChirpSequence},
-    N::Int64, peak_snr_thresh::Real; melody_radius = 2, nfft=256,
-    stft_stride=Int64(floor(nfft/4)), max_freq_hz=100_000, chirp_kwargs...)
+function getmelodyregularization(chirp_seq_all_mics::Dict{Int, ChirpSequence},
+    N::Int, peak_snr_thresh::Real; melody_radius = 2, nfft=256,
+    stft_stride=Int(floor(nfft/4)), max_freq_hz=100_000, chirp_kwargs...)
                                                                     -> Matrix
 
 Produces a weight matrix (of the same dimensions of the STFT of a bat
@@ -265,15 +285,17 @@ Details of the algorithm are as follows:
 1. Initialize `Mx2`, the element-wise square of the weight matrix, to be all
     infinity.
 2. For each microphone in `chirp_seq_all_mics`:
-    a. Find the melody, chirp start/end indices, and whether the beginning of
+    -Find the melody, chirp start/end indices, and whether the beginning of
         the chirp was cut off.
-    b. Loop through all harmonics under `max_freq_hz`:
-        i. Find the distance of each point on the spectrogram to some range
-            around the melody. The radius of this range is either `err_radius`
+    - Loop through all harmonics under `max_freq_hz`:
+        - Find the distance of each point on the spectrogram to some range
+            around the melody. The radius of this range is either,
+            `melody_radius`, which is found by linearly interpolating
+            `melody_radius_start` and `melody_radius_end`,
             or the slope of the melody at the given point, whichever is larger.
 
             This provides some leeway in where the actual melody falls, where the leeway is determined by how fast the melody is changing.
-        ii. Set `Mx2` to the element-wise minimum of its current value and the
+        - Set `Mx2` to the element-wise minimum of its current value and the
             squared distance from step i.
 3. Truncate `Mx2` to the maximum estimated chirp length.
 4. Downsample `Mx2` by a factor of `stft_stride`, setting each index of the
@@ -283,48 +305,53 @@ Inputs:
 - `chirp_seq_all_mics`: mapping of microphone index to `ChirpSequence` object.
 - `N`: upper bound on the length of the bat vocalization.
 - `peak_snr_thresh`: threshold set for the peak SNR of a chirp sequence.
-- `melody_radius` (default: 2): described in step 2.b.i above.
+- `melody_radius_start`, `melody_radius_end` (defaults: 6, 1): described in step 2.b.i above.
 - `nfft` (default: 256): window length to use for the STFT.
 - `stft_stride` (default: `nfft/4`): amount to downsample in step 4 above.
 - `max_freq_hz` (default: 100k): used to find the highest possible harmonic.
 - `chirp_kwargs`: optionally, you can pass in any keyward arguments for
-    `findmelody`, `estimatechirpbounds`, or `computemelodyoffsets`.
+    `findmelody`, `estimatechirpbounds`, `computemelodyoffsets`, or
+    `getmelodyregularization`. See those functions for more detauls
 
 Outputs:
 - `Mx2`: weight matrix, described above.
 - `max_chirp_len`: maximum chirp length from `estimatechirp`.
 """
-function getmelodyregularization(chirp_seq_all_mics::Dict{Int64, ChirpSequence}, N::Int64,
-    peak_snr_thresh::Real; melody_radius = 0, nfft=256, stft_stride=Int64(floor(nfft/4)),
-    max_freq_hz=100_000, chirp_kwargs...)
+function getmelodyregularization(chirp_seq_all_mics::Dict{Int, ChirpSequence}, N::Int,
+    peak_snr_thresh::Real; nfft=256, stft_stride=Int(floor(nfft/4)), max_freq_hz=120_000,
+    melody_radius_start=10, melody_radius_end=0, melody_smoothing_filter_size=64, chirp_kwargs...)
 
     # Get keyword arguments for findmelody, estimatechirpbounds,
     # and computemelodyoffsets
-    chirp_kwargs = merge(Dict{Symbol, Any}(:nfft => nfft), chirp_kwargs...);
+    chirp_kwargs = merge(Dict{Symbol, Any}(:nfft => nfft), chirp_kwargs);
     melody_kwargs, chirp_bound_kwargs, offset_kwargs = separatechirpkwargs(;chirp_kwargs...);
 
     # Find the peak SNR of each microphone (for this chirp sequence )
-    snrs = Dict{Int64, Float64}();
+    snrs = Dict{Int, Real}();
     for (mic, seq_one_mic)=pairs(chirp_seq_all_mics)
         snrs[mic] = maximum(seq_one_mic.snr_data);
     end
     max_snr = maximum(values(snrs));
 
     # N_f is the height of the spectrogram
-    N_f = Int64(nfft / 2 + 1);
+    N_f = Int(nfft / 2 + 1);
     M_f_idxs = [1:N_f;];
 
     # this will be populated with the maximum chirp length
     max_chirp_len = 0;
 
-    # Weight matrix to return. Initialize 
-    Mx2 = ones(N_f, N) * Inf;
+    # Weight matrix to return.
+    nfft_2 = Int(round(nfft/2));
+    Mx2 = ones(N_f, N + nfft_2) * Inf;
 
     offsets = computemelodyoffsets(chirp_seq_all_mics, peak_snr_thresh; chirp_kwargs...);
         
     for (mic, seq_one_mic)=pairs(chirp_seq_all_mics)
         # lower-SNR mics should matter less...
-        snr_weight = snrs[mic] / max_snr;
+        snr_weight =  exp((snrs[mic] - max_snr) / 5);
+        if snr_weight < 1e-4
+            continue;
+        end
         
         # Find the melody and chirp start/end
         melody = findmelody(seq_one_mic, peak_snr_thresh; melody_kwargs...);
@@ -350,35 +377,40 @@ function getmelodyregularization(chirp_seq_all_mics::Dict{Int64, ChirpSequence},
         
         # loop through all valid harmonics
         harmonic = 1;
-        while fftindextofrequency(harmonic*minimum(melody), nfft) < max_freq_hz
+        while fftindextofrequency(min(harmonic*minimum(melody), nfft_2), nfft) < max_freq_hz
             harmonic_melody = melody;
             if harmonic > 1
-                harmonic_melody = getharmonic(seq_one_mic, melody, harmonic);
+                harmonic_melody = getharmonic(seq_one_mic, smoothmelody(melody, filter_size=melody_smoothing_filter_size), harmonic);
             end
+            harmonic_melody = smoothmelody(harmonic_melody; filter_size=melody_smoothing_filter_size);
 
             # We want to find the distance of each point on the spectrogram to
             # some range around the melody. The radius of this range is either
             # `err_radius` or the slope of the melody at the given point,
             # whichever is larger.
+            melody_radius = melody_radius_start .+ (offset+1:chirp_len-2) ./ chirp_len .* (melody_radius_end - melody_radius_start);
+            # melody_radius *= harmonic;
             err = 1.0 .* abs.(M_f_idxs .- transpose(harmonic_melody));
-            err_radius = max.(transpose(abs.(harmonic_melody[1:end-2] - harmonic_melody[3:end]) / 2), melody_radius)
+            err_radius = max.(transpose(abs.(harmonic_melody[1:end-2] - harmonic_melody[3:end]) / 2), melody_radius')
             err[:, 2:end-1] = max.(err[:, 2:end-1], err_radius) .- err_radius;
 
             #  Set `Mx2` to the element-wise minimum of its current value and the
             # squared distance from step i.
-            Mx2[:, offset+1:chirp_len] = min.(Mx2[:, offset+1:chirp_len], (err / snr_weight) .^ 2);
+            Mx2[:, offset+1:chirp_len] = min.(Mx2[:, offset+1:chirp_len], (err / snr_weight));
             harmonic += 1;
         end
     end
+    max_chirp_len += nfft_2;
     Mx2 = Mx2[:, 1:max_chirp_len];
+    max_chirp_len = size(Mx2, 2);
     # downsample Mx2 without losing too much information
-    start_idx = Int64(nfft/2);
+    start_idx = 1;
     window_idx = 1;
 
     Mx2_downsampled = Mx2;
     while start_idx <= size(Mx2, 2);
         Mx2_downsampled[:, window_idx] = 
-            minimum(Mx2[:, start_idx-Int64(ceil(nfft/2))+1:min(size(Mx2, 2), start_idx+Int64(ceil(nfft/2))+stft_stride)];
+            minimum(Mx2[:, max(1, start_idx - nfft_2):min(size(Mx2, 2), start_idx + nfft_2)];
                     dims=2);
         start_idx += stft_stride;
         window_idx += 1
@@ -389,13 +421,12 @@ function getmelodyregularization(chirp_seq_all_mics::Dict{Int64, ChirpSequence},
     return Mx2_downsampled, max_chirp_len;
 end
 
-
 """
-function optimizePALM(chirp_seq::Dict{Int64, ChirpSequence}, Y::Matrix{Float64}, 
-    H_init::Matrix{Float64}, X_init::Array{Float64}, peak_snr_thresh::Real,
-    data_fitting_weight::Real, sparsity_weight::Real, melody_weight::Real;
-    max_iter=1000, alpha=1e-3, gamma_H=1, gamma_X=1, num_debug=10, nfft=256,
-    stft_stride=Int64(floor(nfft/4)), chirp_kwargs...) -> Matrix, Matrix, Int64
+    optimizePALM(chirp_seq::Dict{Int, ChirpSequence}, Y::Matrix{Real}, 
+        H_init::Matrix{Real}, X_init::Array{Real}, peak_snr_thresh::Real,
+        data_fitting_weight::Real, sparsity_weight::Real, melody_weight::Real;
+        max_iter=1000, alpha=1e-3, gamma_H=1, gamma_X=1, num_debug=10, nfft=256,
+        stft_stride=Int(floor(nfft/4)), chirp_kwargs...) -> Matrix, Matrix, Int
                                                 
 Performs blind deconvolution, formulated as an optimization problem with a
 combination of the following objectives:
@@ -409,8 +440,8 @@ combination of the following objectives:
     more details.
 
 This optimization problem is solved using PALM (proximal alternating linearized
-optimization: https://arxiv.org/abs/1604.00526), following the general process
-outlined in https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7730569/.
+optimization: [paper](https://arxiv.org/abs/1604.00526)), following the general process
+outlined in [this paper](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC7730569/).
 
 Inputs:
 - `chirp_seq`: mapping of microphone index to `ChirpSequence` object.
@@ -448,22 +479,27 @@ Outputs:
 - `H`: matrix of impulse responses, as estimated by the optimization algorithm.
 - `max_chirp_len`: maximum chirp length from `estimatechirp`.
 """
-function optimizePALM(chirp_seq::Dict{Int64, ChirpSequence}, Y::Matrix{Float64}, 
-        H_init::Matrix{Float64}, X_init::Array{Float64}, peak_snr_thresh::Real,
+function optimizePALM(chirp_seq::Dict{Int, ChirpSequence}, mics::AbstractArray{Int},
+        Y::AbstractArray, H_init::AbstractArray, X_init::AbstractArray, peak_snr_thresh::Real,
         data_fitting_weight::Real, sparsity_weight::Real, melody_weight::Real;
         max_iter=1000, alpha=1e-3, gamma_H=1, gamma_X=1, 
-        num_debug=10, nfft=256, stft_stride=Int64(floor(nfft/4)), 
+        num_debug=10, nfft=256, stft_stride=Int(floor(nfft/4)), 
         chirp_kwargs...)
-
-    mu_1, mu_2, mu_3 = data_fitting_weight, sparsity_weight / 5000, melody_weight
 
     # print a debug statement after this many iterations
     debug_freq = ceil(max_iter / num_debug);
 
     # sizes and optimization variables
     N, K = size(Y);
-    H = copy(H_init);
-    X = copy(X_init);
+    Y = vectortomatrix(Y);
+    H = copy(vectortomatrix(H_init);)
+    X = copy(vectortomatrix(X_init));
+
+    snrs = [maximum(chirp_seq[mic].snr_data) for mic=mics];
+    snr_weights = exp.((snrs .- maximum(snrs)) ./ 20);
+    
+    mu_1, mu_2, mu_3 = data_fitting_weight, sparsity_weight / 5000, melody_weight
+
 
     # Take the FFT of all signals
     Y_fft = colwisefft(Y) ./ sqrt(N);
@@ -515,7 +551,8 @@ function optimizePALM(chirp_seq::Dict{Int64, ChirpSequence}, Y::Matrix{Float64},
         C_diags = gamma_H .* (L1_prime .+ mu_2 / (K) ./ sqrt.(H .^ 2 .+ alpha ^ 2));
 
         # Gradient of the objective function with respect to H
-        grad_H_f = mu_1 / K * real.(colwiseifft(conj.(X_fft) .* (sqrt(N) .* X_fft .* H_fft .- Y_fft))) + mu_2 / (K) .* H ./ sqrt.(H .^ 2 .+ alpha ^ 2);
+        grad_H_f = mu_1 .* snr_weights' ./ K .* real.(colwiseifft(conj.(X_fft) .* (sqrt(N) .* X_fft .* H_fft .- Y_fft))) + 
+                    snr_weights' .* mu_2 ./ (K) .* H ./ sqrt.(H .^ 2 .+ alpha ^ 2);
 
         # Perform a gradient descent step on H
         H = H .- grad_H_f ./ C_diags;
@@ -530,8 +567,9 @@ function optimizePALM(chirp_seq::Dict{Int64, ChirpSequence}, Y::Matrix{Float64},
 
         # Gradient of the data-fitting term with respect to X
         grad_X_f = mu_1 / K * real.(
-            DSP.ifft((sqrt(N) .* (abs.(H_fft) .^ 2) * ones(K)) .* X_fft .- (conj.(H_fft) .* Y_fft) * ones(K))
-        )[1:max_chirp_len];
+            DSP.ifft((sqrt(N) .* (abs.(H_fft) .^ 2)) .* X_fft .- (conj.(H_fft) .* Y_fft))
+        ) * (ones(K) .* snr_weights');
+        grad_X_f = grad_X_f[1:max_chirp_len];
 
         # Compute the gradient of the melody-following regularization term with
         # respect to X
@@ -544,7 +582,7 @@ function optimizePALM(chirp_seq::Dict{Int64, ChirpSequence}, Y::Matrix{Float64},
             Mx2FWX[1:N_f] = Mx2[:, m] .* DSP.fft(W .* X[win_start:win_start+nfft-1])[1:N_f];
 
             # Use conjugate symmetry of the Fourier transform
-            Mx2FWX[end:-1:Int64(nfft/2+2)] = conj.(Mx2FWX[2:Int64(nfft/2)]);
+            Mx2FWX[end:-1:Int(nfft/2+2)] = conj.(Mx2FWX[2:Int(nfft/2)]);
 
             # Take the inverse Fourier transform
             ifft_Mx2FWX = DSP.ifft(Mx2FWX);

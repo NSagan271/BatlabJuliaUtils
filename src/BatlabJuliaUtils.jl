@@ -14,15 +14,15 @@ export getnoisesampleidxs, windowedenergy, estimatesnr
 
 export getplottingsettings, plotmicdata, plotfftmag, myplot, myplot!, plotmicdata!
 
-export ChirpSequence, getboundsfromboxes, findhighsnrregions, findroughchirpsequenceidxs, adjustsequenceidxs, getvocalizationtimems, groupchirpsequencesbystarttime, plotchirpsequence, plotchirpsequenceboxes
+export ChirpSequence, getboundsfromboxes, findhighsnrregions, findhighsnrregionidxs, adjusthighsnridxs, getvocalizationtimems, groupchirpsequencesbystarttime, plotchirpsequence, plotchirpsequenceboxes, estimatebuzzphase
 
 export FS, FS_VIDEO, SPEED_OF_SOUND, DEFAULT_PLOT_DIM, MAX_SEQUENCE_LENGTH
 
-export findmelody, findmelodyhertz, getharmonic, estimatechirpbounds, getchirpstartandendindices, plotmelody, plotmelodydb, estimatechirp, plotestimatedchirps, computemelodyoffsets, plotoffsetchirps, separatechirpkwargs
+export findmelody, findmelodyhertz, smoothmelody, getharmonic, estimatechirpbounds, getchirpstartandendindices, plotmelody, plotmelodydb, estimatechirp, plotestimatedchirps, computemelodyoffsets, plotoffsetchirps, separatechirpkwargs
 
 export colwisenormalize, getchirpsequenceY, getinitialconditionsnr, getinitialconditionsparsity, getmelodyregularization, optimizePALM
 
-export randint, distancefrommic
+export randint, distancefrommic, matrixtovector, vectortomatrix
 
 include("Defaults.jl");
 include("ColWiseFFTs.jl");

@@ -1,7 +1,7 @@
 include("Defaults.jl");
 
 """
-    audioindextosec(index::Int64; fs=250 kHz) -> Float64
+    audioindextosec(index::Int; fs=250 kHz) -> Real
 
 Given an index of the audio data, calculate the number of seconds since the
 beginning of the audio data.
@@ -13,12 +13,12 @@ Inputs:
 Output:
 - Seconds since the beginning of the audio data
 """
-function audioindextosec(index::Int64; fs=FS) :: Float64
+function audioindextosec(index::Int; fs=FS) :: Real
     return index / fs;
 end
 
 """
-    audioindextoms(index::Int64; fs=250 kHz) -> Float64
+    audioindextoms(index::Int; fs=250 kHz) -> Real
 
 Given an index of the audio data, calculate the number of milliseconds
 since the beginning of the audio data.
@@ -30,12 +30,12 @@ Inputs:
 Output:
 - Milliseconds since the beginning of the audio data
 """
-function audioindextoms(index::Int64; fs=FS) :: Float64
+function audioindextoms(index::Int; fs=FS) :: Real
     return index / fs * 1000;
 end
 
 """
-    fftindextofrequency(index::Int64, N_fft::Int64; fs=250 kHz) -> Float64
+    fftindextofrequency(index::Int, N_fft::Int; fs=250 kHz) -> Real
 
 Given an index of an Discrete Fourier Transform taken on a segment of audio
 datal determine what frequency (in Hz) it corresponds to.
@@ -48,7 +48,7 @@ Inputs:
 Output:
 - Frequency, in Hz, of the specified Fourier Transform index
 """
-function fftindextofrequency(index::Int64, N_fft::Int64; fs=FS) :: Float64
+function fftindextofrequency(index::Int, N_fft::Int; fs=FS) :: Real
     omega = 2*pi/N_fft * (index-1);
     if omega > pi
         omega = 2pi - omega;
@@ -57,7 +57,7 @@ function fftindextofrequency(index::Int64, N_fft::Int64; fs=FS) :: Float64
 end
 
 """
-    getfftfrequencies(N_fft::Int64; fs=250 kHz) -> Array{Float64}
+    getfftfrequencies(N_fft::Int; fs=250 kHz) -> Array{Real}
 
 Return an array of length `N_fft`, where each element is the frequency, in
 Hz, of the corresponding index of a length-`N_fft` Fourier Transform of
@@ -67,12 +67,12 @@ Inputs:
 - `N_fft`: length of the Fourier Transform, in samples.
 - `fs`: sampling frequency, in Hertz. Default set in Defaults.jl.
 """
-function getfftfrequencies(N_fft::Int64; fs=FS) :: Array{Float64}
+function getfftfrequencies(N_fft::Int; fs=FS) :: AbstractArray
     return fftindextofrequency.(1:N_fft, N_fft; fs=fs);
 end
 
 """
-    videoindextosec(idx_video::Int64, L_video::Int64; fs_video=360) -> Float64
+    videoindextosec(idx_video::Int, L_video::Int; fs_video=360) -> Real
 
 Given an index of the video data, return the number of seconds since the
 start of the audio data.
@@ -86,12 +86,12 @@ Inputs:
 - `fs_video`: sampling rate of the video data, in Hertz. Default set in 
     Defaults.jl.
 """
-function videoindextosec(idx_video::Int64, L_video::Int64; fs_video=FS_VIDEO) :: Float64
+function videoindextosec(idx_video::Int, L_video::Int; fs_video=FS_VIDEO) :: Real
     return (-(L_video - idx_video) / fs_video + 8);
 end
 
 """
-    sectovideoindex(time_audio::Number, L_video::Int64; fs_video=360) -> Int64
+    sectovideoindex(time_audio::Number, L_video::Int; fs_video=360) -> Int
 
 Given a time (since the start of the audio data) in seconds, calculate the
 index of the closest video frame.
@@ -105,13 +105,13 @@ Inputs:
 - `fs_video`: sampling rate of the video data, in hertz. Default set in 
     Defaults.jl.
 """
-function sectovideoindex(time_audio::Number, L_video::Int64; fs_video=FS_VIDEO) :: Int64
-    return Int64(round(L_video - (8 - time_audio) * fs_video));
+function sectovideoindex(time_audio::Number, L_video::Int; fs_video=FS_VIDEO) :: Int
+    return Int(round(L_video - (8 - time_audio) * fs_video));
 end
 
 """
-    getvideoslicefromtimes(location_data::Matrix{Float64}, t1::Float64,
-        t2::Float64, fs_video=360) -> UnitRange{Int64}, Matrix{Float64}
+    getvideoslicefromtimes(location_data::Matrix{Real}, t1::Real,
+        t2::Real, fs_video=360) -> UnitRange{Int}, Matrix{Real}
 
 Returns the video data corresponding to time interval `[t1, t2]` of the audio
 data, where `t1` and `t2` are in seconds.
@@ -134,7 +134,7 @@ Outputs:
     taken.
 - `centroid_slice`: centroid data in the interval `[t1, t2]`.
 """
-function getvideoslicefromtimes(location_data::Matrix{Float64}, t1::Float64, t2::Float64, fs_video=FS_VIDEO)
+function getvideoslicefromtimes(location_data::AbstractArray, t1::Real, t2::Real, fs_video=FS_VIDEO)
     # if t1_ms > 8000 || t2_ms > 8000
     #     @warn "Trying to access video data past the end. Data returned will only be up to the 8 second mark.";
     #     t1_ms = min(t1_ms, 8000);
@@ -152,9 +152,9 @@ function getvideoslicefromtimes(location_data::Matrix{Float64}, t1::Float64, t2:
 end
 
 """
-    getvideodataslicefromaudioindices(location_data::Matrix{Float64},
-        t1_idx::Float64, t2_idx::Float64, fs_video=360, FS=250k) 
-                                        -> UnitRange{Int64}, Matrix{Float64}
+    getvideodataslicefromaudioindices(location_data::Matrix{Real},
+        t1_idx::Real, t2_idx::Real, fs_video=360, FS=250k) 
+                                        -> UnitRange{Int}, Matrix{Real}
 
 Same as `getvideoslicefromtimes`, but takes audio data indices in lieu of times.
 
@@ -172,7 +172,7 @@ Inputs:
 
 Outputs: see `getvideoslicefromtimes`
 """
-function getvideodataslicefromaudioindices(location_data::Matrix{Float64}, t1_idx::Int64, t2_idx::Int64, 
+function getvideodataslicefromaudioindices(location_data::AbstractArray, t1_idx::Int, t2_idx::Int, 
             fs_video=FS_VIDEO, fs=FS)
     return getvideoslicefromtimes(location_data, audioindextosec(t1_idx, fs=FS), 
         audioindextosec(t2_idx, fs=FS), fs_video=FS_VIDEO);

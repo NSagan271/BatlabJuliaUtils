@@ -2,8 +2,8 @@ using DSP;
 
 """
     STFTwithdefaults(y::AbstractArray, nfft=256,
-        noverlap=Int64(round(nfft/2)), window=hamming(nfft), zero_pad=true)
-                                                        -> Matrix{ComplexF64}
+        noverlap=Int(round(nfft/2)), window=hamming(nfft), zero_pad=true)
+                                                        -> Matrix{Complex}
 
 Wrapper around `DSP.Periodograms.stft`, which takes the short-time Fourier
 Transform (STFT) of a signal, with some reasonable default values set.
@@ -22,7 +22,8 @@ Output:
     different frequency and `N` columns, where `N` is the number of time
     windows taken.
 """
-function STFTwithdefaults(y::AbstractArray; nfft=256, noverlap=Int64(round(nfft/2)), window=hamming(nfft), zero_pad=true) :: Matrix{ComplexF64}
+function STFTwithdefaults(y::AbstractArray; nfft=256, noverlap=Int(round(nfft/2)), window=hamming(nfft), zero_pad=true) :: Matrix
+    y = matrixtovector(y);
     if zero_pad
         y = vcat(zeros(nfft-1), y, zeros(nfft-1));
     end
@@ -31,7 +32,7 @@ end
 
 """
     plotSTFTdb(Sy_db::Matrix; nfft=Int(2*floor(size(Sy_db, 1))), 
-        noverlap=Int64(round(nfft/2)), crange=50, fs=250 kHz,
+        noverlap=Int(round(nfft/2)), crange=50, fs=250 kHz,
         plotting_kwargs...)
 
 Plots spectrogram `Sy_db`, where `Sy_db` is in decibels (If `Sy` is the STFT of
@@ -53,7 +54,7 @@ Inputs:
 - `plotting_kwargs`: extra keyword arguments for plotting (passed into the
     heatmap function).
 """
-function plotSTFTdb(Sy_db::Matrix; nfft=Int(2*(size(Sy_db, 1) - 1)), noverlap=Int64(round(nfft/2)), crange=50, fs=FS, plotting_kwargs...)
+function plotSTFTdb(Sy_db::Matrix; nfft=Int(2*(size(Sy_db, 1) - 1)), noverlap=Int(round(nfft/2)), crange=50, fs=FS, plotting_kwargs...)
     stride = nfft-noverlap;
     kwargs = getplottingsettings("Milliseconds", "kHz", "Spectrogram"; plotting_kwargs...)
     replace!(Sy_db, NaN=>-10000);
@@ -72,8 +73,8 @@ function plotSTFTdb(Sy_db::Matrix; nfft=Int(2*(size(Sy_db, 1) - 1)), noverlap=In
 end
 
 """
-    plotSTFT(Sy::Matrix{ComplexF64}; nfft=Int(2*floor(size(Sy_db, 1))), 
-        noverlap=Int64(round(nfft/2)), crange=50, fs=250 kHz,
+    plotSTFT(Sy::Matrix{Complex}; nfft=Int(2*floor(size(Sy_db, 1))), 
+        noverlap=Int(round(nfft/2)), crange=50, fs=250 kHz,
         plotting_kwargs...)
 
 Plots the spectrogram corresponding to STFT `Sy` (i.e., plots a heatmap of
@@ -83,12 +84,12 @@ Inputs:
 - `Sy`: STFT, in decibels.
 - See `plotSTFTdb` for the rest of the arguments.
 """
-function plotSTFT(Sy::Matrix{ComplexF64}; nfft=Int(2*(size(Sy_db, 1) - 1)), noverlap=Int64(round(nfft/2)), crange=50, fs=FS, kwargs...)
+function plotSTFT(Sy::Matrix; nfft=Int(2*(size(Sy, 1) - 1)), noverlap=Int(round(nfft/2)), crange=50, fs=FS, kwargs...)
     return plotSTFTdb(pow2db.(abs.(Sy) .^ 2); nfft=nfft, noverlap=noverlap, fs=fs, crange=crange, kwargs...)
 end
 
 """
-    plotSTFTtime(y::AbstractArray; nfft=256, noverlap=Int64(round(nfft/2)),
+    plotSTFTtime(y::AbstractArray; nfft=256, noverlap=Int(round(nfft/2)),
         window=hamming(nfft), zero_pad=true, crange=50, fs=250 kHz,
         plotting_kwargs...)
 
@@ -99,7 +100,7 @@ Inputs:
 - `nfft`, `noverlap`, `window`, `zero_pad`: see `STFTwithdefaults`.
 - `crange`, `fs`, `plotting_kwargs`: see `plotSTFTdb`
 """
-function plotSTFTtime(y::AbstractArray; nfft=256, noverlap=Int64(round(nfft/2)),
+function plotSTFTtime(y::AbstractArray; nfft=256, noverlap=Int(round(nfft/2)),
         window=hamming(nfft), zero_pad=true, crange=50, fs=FS, kwargs...)
     return plotSTFT(STFTwithdefaults(y, nfft=nfft, noverlap=noverlap, window=window, zero_pad=zero_pad), nfft=nfft, noverlap=noverlap, fs=fs; kwargs...);
 end
